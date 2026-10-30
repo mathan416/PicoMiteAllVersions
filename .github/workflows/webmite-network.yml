@@ -1,0 +1,35 @@
+name: WebMite network regression checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/webmite_network/run_tests.py
+  firmware-build:
+    needs: host-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch official Arm GNU 14.2 toolchain
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/arm.tar.xz" https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz
+          tar -xJf "$RUNNER_TEMP/arm.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi/bin" >> "$GITHUB_PATH"
+      - name: Fetch SDK 2.1.1 and apply documented release replacements
+        run: |
+          git clone --depth 1 --branch 2.1.1 https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --depth 1 lib/lwip lib/cyw43-driver lib/tinyusb
+          cp gpio.c "$RUNNER_TEMP/pico-sdk/src/rp2_common/hardware_gpio/gpio.c"
+          cp gpio.h "$RUNNER_TEMP/pico-sdk/src/rp2_common/hardware_gpio/include/hardware/gpio.h"
+          cp float_sci_m33_vfp.S "$RUNNER_TEMP/pico-sdk/src/rp2_common/pico_float/float_sci_m33_vfp.S"
+          cp flash.c "$RUNNER_TEMP/pico-sdk/src/rp2_common/hardware_flash/flash.c"
+      - name: Test saved-options layout guard
+        run: python3 tests/webmite_network/check_layout_guard.py
+      - name: Compile PicoCalc WebMite (no flashing or release publication)
+        run: |
+          cmake -S . -B build -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2

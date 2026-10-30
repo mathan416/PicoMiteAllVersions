@@ -35,7 +35,6 @@ jmp_buf recover;
 static TCP_SERVER_T* tcp_server_init(void) {
     if(!TCPstate) {
         TCPstate = (TCP_SERVER_T*)calloc(1,sizeof(TCP_SERVER_T));
-        memset(TCPstate,0,sizeof(TCP_SERVER_T));
     }
     if (!TCPstate) {
         //DEBUG_printf("failed to allocate state\r\n");
@@ -47,27 +46,41 @@ static TCP_SERVER_T* tcp_server_init(void) {
     TCPstate->telnet_pcb_no=99;
     return TCPstate;
 }
+/* Release bookkeeping only. lwIP has already freed the PCB in err callbacks. */
+void tcp_server_forget(void *arg, int pcb) {
+    TCP_SERVER_T *state = (TCP_SERVER_T *)arg;
+    if (!state || pcb < 0 || pcb >= MaxPcb) return;
+    state->client_pcb[pcb] = NULL;
+    state->sent_len[pcb] = state->recv_len[pcb] = 0;
+    state->total_sent[pcb] = state->to_send[pcb] = 0;
+    state->inttrig[pcb] = state->keepalive[pcb] = 0;
+    state->buffer_sent[pcb] = NULL;
+    FreeMemorySafe((void **)&state->buffer_recv[pcb]);
+    if (state->telnet_pcb_no == pcb) {
+        state->telnet_pcb_no = 99;
+        state->telnet_init_sent = 0;
+    }
+}
+
 err_t tcp_server_close(void *arg, int pcb) {
-    if(pcb==99)return ERR_OK;
-    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    TCP_SERVER_T *state = (TCP_SERVER_T *)arg;
+    if (pcb == 99) return ERR_OK;
+    if (!state || pcb < 0 || pcb >= MaxPcb) return ERR_VAL;
+    struct tcp_pcb *client = state->client_pcb[pcb];
     err_t err = ERR_OK;
-    if (state->client_pcb[pcb] != 0) {
-        tcp_arg(state->client_pcb[pcb], NULL);
-        tcp_sent(state->client_pcb[pcb], NULL);
-        tcp_recv(state->client_pcb[pcb], NULL);
-        tcp_err(state->client_pcb[pcb], NULL);
-        tcp_poll(state->client_pcb[pcb], NULL,0);
-        err = tcp_close(state->client_pcb[pcb]);
+    if (client && client != (struct tcp_pcb *)44) {
+        tcp_arg(client, NULL);
+        tcp_sent(client, NULL);
+        tcp_recv(client, NULL);
+        tcp_err(client, NULL);
+        tcp_poll(client, NULL, 0);
+        err = tcp_close(client);
         if (err != ERR_OK) {
-            tcp_abort(state->client_pcb[pcb]);
-            error("close failed %, calling abort", err);
+            tcp_abort(client);
             err = ERR_ABRT;
         }
-        //DEBUG_printf("Close success %x on pcb %x\r\n",state->client_pcb[pcb],pcb);
-        state->recv_len[pcb]=0;
-        state->client_pcb[pcb]=NULL;
-        FreeMemorySafe((void **)&state->buffer_recv[pcb]);
     }
+    tcp_server_forget(state, pcb);
     return err;
 }
 
@@ -118,16 +131,19 @@ err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb, int pcb)
     int t;
     err_t err;
     uint64_t timestart=time_us_64()+5000000;
-    while((t=tcp_sndqueuelen(tpcb))>6 && time_us_64()<timestart){
+    while(state->client_pcb[pcb] == tpcb && (t=tcp_sndqueuelen(tpcb))>6 && time_us_64()<timestart){
         //DEBUG_printf("Send queue %u\r\n", t);
         if(startupcomplete)cyw43_arch_poll();
     } 
+    /* Polling above may have delivered a disconnect/error callback. */
+    if (state->client_pcb[pcb] != tpcb) return ERR_CONN;
     state->pcbopentime[pcb]=time_us_64();
     if(time_us_64()<timestart){
-           err = tcp_write(tpcb, state->buffer_sent[pcb], state->to_send[pcb],  0);
+           err = tcp_write(tpcb, state->buffer_sent[pcb], state->to_send[pcb], TCP_WRITE_FLAG_COPY);
     } else err=1;
     if (err != ERR_OK) {
-        tcp_server_close(state,pcb);
+        err_t close_err = tcp_server_close(state,pcb);
+        return close_err == ERR_ABRT ? ERR_ABRT : err;
     }
     return ERR_OK;
 }
@@ -135,7 +151,7 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
 //        static int count=0;
         TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
         if (!p) {
-                return ERR_OK;
+                return tcp_server_close(state, pcb) == ERR_ABRT ? ERR_ABRT : ERR_OK;
         }
         // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
         // can use this method to cause an assertion in debug mode, if this method is called when
@@ -150,9 +166,11 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                         state->to_send[pcb]= state->total_sent[pcb] = strlen(httpheadersfail);
                         state->buffer_sent[pcb]=(unsigned char *)httpheadersfail;
                         if(state->client_pcb[pcb]){
-                                tcp_server_send_data(state, state->client_pcb[pcb],pcb);
-                                checksent(state,0, pcb);
-                                tcp_server_close(state, pcb) ;
+                                err_t result = tcp_server_send_data(state, state->client_pcb[pcb],pcb);
+                                if (result == ERR_OK) result = tcp_server_close(state, pcb);
+                                /* tcp_close drains queued data; do not poll recursively in this callback. */
+                                pbuf_free(p);
+                                return result == ERR_ABRT ? ERR_ABRT : ERR_OK;
                         }
                 } else {
                         OptionErrorSkip = 1;
@@ -201,10 +219,9 @@ err_t tcp_server_recv7(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
 }
 
 static void tcp_server_err(void *arg, err_t err, int pcb) {
-    if (err != ERR_ABRT) {
-        //DEBUG_printf("tcp_client_err_fn %d\r\n", err);
-        tcp_server_close(arg, pcb);
-    }
+    /* tcp_err is called after lwIP frees the PCB; do not call tcp_close here. */
+    (void)err;
+    tcp_server_forget(arg, pcb);
 }
 static void tcp_server_err0(void *arg, err_t err) {
         tcp_server_err(arg, err, 0);
@@ -239,18 +256,22 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
         tcp_server_result(arg, err);
         return ERR_VAL;
     }
-    for(pcb=0;pcb<=MaxPcb;pcb++){
-        if(pcb==MaxPcb)MMPrintString("Warning: No free connections\r\n");
-//        if(pcb==MaxPcb)error("No free connections");
-        if(state->client_pcb[pcb]==NULL){
-                state->client_pcb[pcb] = client_pcb;
-                break;
-        }
+    /* One console owns the shared BASIC input/output stream. */
+    if (client_pcb->local_port == 23 && Option.Telnet && state->telnet_pcb_no != 99) {
+        tcp_abort(client_pcb);
+        return ERR_ABRT;
     }
+    for (pcb = 0; pcb < MaxPcb; pcb++) {
+        if (state->client_pcb[pcb] == NULL) break;
+    }
+    if (pcb == MaxPcb) {
+        tcp_abort(client_pcb);
+        return ERR_ABRT;
+    }
+    state->client_pcb[pcb] = client_pcb;
     
     if(client_pcb->local_port==23 && Option.Telnet){
-        starttelnet(client_pcb, pcb, arg) ;
-        return ERR_OK;
+        return starttelnet(client_pcb, pcb, arg);
     } else if(client_pcb->local_port==TCP_PORT && TCP_PORT){
         //DEBUG_printf("HTTP Client connected %x on pcb %d\r\n",(uint32_t)client_pcb,pcb);
         tcp_arg(client_pcb, state);

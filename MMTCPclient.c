@@ -272,7 +272,7 @@ int cmd_tcpclient(void){
             state->BUF_SIZE=size;
             state->buffer=q;
             state->buffer_len=0;
-            err_t err = tcp_write((struct tcp_pcb *)state->tcp_pcb, &request[1], (uint32_t)request[0], 0);
+            err_t err = tcp_write((struct tcp_pcb *)state->tcp_pcb, &request[1], (uint32_t)request[0], TCP_WRITE_FLAG_COPY);
             if(err)error("write failed %",err);
             Timer4=timeout;
             while(!state->buffer_len && Timer4)ProcessWeb(0);
@@ -309,7 +309,7 @@ int cmd_tcpclient(void){
             state->BUF_SIZE=size;
             state->buffer=q;
             state->buffer_len=0;
-            err_t err = tcp_write((struct tcp_pcb *)state->tcp_pcb, &request[1], (uint32_t)request[0], 0);
+            err_t err = tcp_write((struct tcp_pcb *)state->tcp_pcb, &request[1], (uint32_t)request[0], TCP_WRITE_FLAG_COPY);
             if(err)error("write failed %",err);
             return 1;
     }
