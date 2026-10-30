@@ -95,7 +95,11 @@ uint32_t getProgramSize(void) {
 }
 
 uint32_t getFreeProgramSpace() {
+#ifdef PICOCALC_UF2LOADER
+   return loader_flash_size() - getProgramSize();
+#else
    return PICO_FLASH_SIZE_BYTES - getProgramSize();
+#endif
 }
 static inline CommandToken commandtbl_decode(const unsigned char *p){
     return ((CommandToken)(p[0] & 0x7f)) | ((CommandToken)(p[1] & 0x7f)<<7);
@@ -5215,12 +5219,16 @@ void MIPS16 fun_info(void){
             targ=T_STR;
             return;
 		} else if(checkstring(tp, (unsigned char *)"FLASH SIZE")){
+#ifdef PICOCALC_UF2LOADER
+            iret = loader_flash_size();
+#else
             uint8_t txbuf[4] = {0x9f};
             uint8_t rxbuf[4] = {0};
             disable_interrupts_pico();
             flash_do_cmd(txbuf, rxbuf, 4);
             enable_interrupts_pico();
             iret= 1 << rxbuf[3];
+#endif
 			targ=T_INT;
 			return;
         } else if(checkstring(tp, (unsigned char *)"HEIGHT")){

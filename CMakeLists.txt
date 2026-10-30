@@ -291,3 +291,16 @@ if(COMPILE STREQUAL "WEB" OR COMPILE STREQUAL "WEBRP2350")
     target_link_options(PicoMite PRIVATE
         "LINKER:-T,${CMAKE_CURRENT_LIST_DIR}/webmite_layout_check.ld")
 endif()
+
+# Separate candidate: preserve the USB-only netfix2 configuration by default.
+option(PICOCALC_UF2LOADER "Partition-aware flash for PicoCalc UF2 Loader" OFF)
+if(PICOCALC_UF2LOADER)
+    if(NOT COMPILE STREQUAL "WEBRP2350")
+        message(FATAL_ERROR "SD compatibility is currently scoped to WEBRP2350")
+    endif()
+    target_sources(PicoMite PRIVATE LoaderFlash.c)
+    # This WebMite build does not launch core1. SDK flash_safe_execute must
+    # treat the unused core as safe rather than waiting for a lockout victim.
+    target_compile_definitions(PicoMite PRIVATE PICOCALC_UF2LOADER=1 PICO_FLASH_ASSUME_CORE1_SAFE=1)
+    set_source_files_properties(FileIO.c LoaderFlash.c PROPERTIES COMPILE_OPTIONS "-Os")
+endif()

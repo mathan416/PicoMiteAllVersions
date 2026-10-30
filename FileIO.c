@@ -4978,6 +4978,9 @@ void LoadOptions(void)
     unsigned char *pp = (unsigned char *)flash_option_contents;
     unsigned char *qq = (unsigned char *)&Option;
     while (i--) *qq++ = *pp++;
+#ifdef PICOCALC_UF2LOADER
+    if (Option.FlashSize > loader_flash_size()) Option.FlashSize = loader_flash_size();
+#endif
     RGB121map[0] = BLACK;
     RGB121map[1] = BLUE;
     RGB121map[2] =  MYRTLE;
@@ -5140,8 +5143,10 @@ void ResetOptions(bool startup)
     Option.repeat = 0b101100;
     Option.VGA_HSYNC=21;
     Option.VGA_BLUE=24;
+#ifndef PICOCALC_UF2LOADER
     uint8_t txbuf[4] = {0x9f};
     uint8_t rxbuf[4] = {0};
+#endif
     Option.heartbeatpin = 43;
 #ifdef rp2350
     if(!rp2350a){
@@ -5149,10 +5154,14 @@ void ResetOptions(bool startup)
         Option.AllPins=1;
     }
 #endif
+#ifdef PICOCALC_UF2LOADER
+    Option.FlashSize = loader_flash_size();
+#else
     disable_interrupts_pico();
     flash_do_cmd(txbuf, rxbuf, 4);
     Option.FlashSize= 1 << rxbuf[3];
     enable_interrupts_pico();
+#endif
     SaveOptions();
     uSec(250000);
 }
