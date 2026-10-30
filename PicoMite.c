@@ -548,10 +548,20 @@ void __not_in_flash_func(routinechecks)(void){
 
 int __not_in_flash_func(getConsole)(void) {
     int c=-1;
+#ifdef PICOCALC_UF2LOADER
+    int trace = sd_trace_input == 1;
+    if (trace) { sd_trace_input = 2; SDTrace("[SD3] input: web poll\r\n"); }
+#endif
 #ifdef PICOMITEWEB
     ProcessWeb(1);
 #endif
+#ifdef PICOCALC_UF2LOADER
+    if (trace) SDTrace("[SD3] input: routine checks\r\n");
+#endif
     CheckAbort();
+#ifdef PICOCALC_UF2LOADER
+    if (trace) { SDTrace("[SD3] input: poll returned\r\n"); sd_trace_input = 0; }
+#endif
     if(ConsoleRxBufHead != ConsoleRxBufTail) {                            // if the queue has something in it
         c = ConsoleRxBuf[ConsoleRxBufTail];
         ConsoleRxBufTail = (ConsoleRxBufTail + 1) % CONSOLE_RX_BUF_SIZE;   // advance the head of the queue
@@ -3921,6 +3931,14 @@ uint32_t testPSRAM(void){
 }
 #endif
 #endif
+#ifdef PICOCALC_UF2LOADER
+static volatile int sd_display_ready;
+volatile int sd_trace_input;
+void SDTrace(const char *text) {
+    if (!sd_display_ready) return;
+    while (*text) DisplayPutC(*text++);
+}
+#endif
 lfs_t lfs;
 lfs_dir_t lfs_dir;
 struct lfs_info lfs_info;
@@ -4349,6 +4367,10 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
     if(Option.BackLightLevel)setBacklight(Option.BackLightLevel);
 #endif
 #endif
+#ifdef PICOCALC_UF2LOADER
+    sd_display_ready = 1;
+    SDTrace("[SD3] display initialized\r\n");
+#endif
     ErrorInPrompt = false;
     exception_set_exclusive_handler(HARDFAULT_EXCEPTION,sigbus);
     exception_set_exclusive_handler(SVCALL_EXCEPTION,sigbus);
@@ -4475,7 +4497,13 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
         SaveOptions();
         MMPrintString("I2C Keyboard not found, OPTION KEYBOARD disabled\r\n");
     }
+#ifdef PICOCALC_UF2LOADER
+    SDTrace("[SD3] filesystem boot update: begin\r\n");
+#endif
     updatebootcount();
+#ifdef PICOCALC_UF2LOADER
+    SDTrace("[SD3] filesystem boot update: done\r\n");
+#endif
     *tknbuf = 0;
      ContinuePoint = nextstmt;                               // in case the user wants to use the continue command
 #ifdef USBKEYBOARD
@@ -4535,9 +4563,21 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
             ClearProgram(true);
         }
     #ifdef PICOMITEWEB
+#ifdef PICOCALC_UF2LOADER
+    SDTrace("[SD3] Wi-Fi arch init: begin\r\n");
+#endif
     if (cyw43_arch_init()==0) {
+#ifdef PICOCALC_UF2LOADER
+        SDTrace("[SD3] Wi-Fi arch init: done\r\n");
+#endif
         startupcomplete=1;
+#ifdef PICOCALC_UF2LOADER
+        SDTrace("[SD3] WebConnect: begin\r\n");
+#endif
         WebConnect();
+#ifdef PICOCALC_UF2LOADER
+        SDTrace("[SD3] WebConnect: done\r\n");
+#endif
     }
     #endif
 #ifdef PICOMITE
@@ -4608,6 +4648,20 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
             MMPromptPos=2;    //Save length of prompt
         }    
         ErrorInPrompt = false;
+#ifdef PICOCALC_UF2LOADER
+        {
+            char tracebuf[100];
+            uint32_t mask = save_and_disable_interrupts();
+            restore_interrupts(mask);
+            unsigned int before = CursorTimer;
+            busy_wait_ms(30);
+            snprintf(tracebuf, sizeof(tracebuf), "[SD3] irqmask=%lu ticks=%lu key=%d bus=%d/%d\r\n",
+                     (unsigned long)mask, (unsigned long)(CursorTimer-before),
+                     Option.KeyboardConfig, I2C0locked, I2C1locked);
+            SDTrace(tracebuf);
+            sd_trace_input = 1;
+        }
+#endif
         EditInputLine();
         //InsertLastcmd(inpbuf);                                  // save in case we want to edit it later
         if(!*inpbuf) continue;                                      // ignore an empty line

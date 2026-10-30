@@ -4,6 +4,7 @@
  */
 #define LOADER_FLASH_IMPLEMENTATION
 #include "LoaderFlash.h"
+#include <stdio.h>
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
 #include "hardware/flash.h"
@@ -29,7 +30,13 @@ static void loader_flash_op(uint32_t offset, size_t count, uint8_t *data,
         (CFLASH_ASPACE_VALUE_RUNTIME << CFLASH_ASPACE_LSB)
     };
     int result = rom_flash_op(flags, XIP_BASE + offset, count, data);
-    if (result != PICO_OK) panic("Application flash failed: %d", result);
+    if (result != PICO_OK) {
+        char message[96];
+        snprintf(message, sizeof(message), "[SD3] ROM FLASH ERROR %d addr=%08lx len=%lu\r\n", result,
+                 (unsigned long)offset, (unsigned long)count);
+        SDTrace(message);
+        panic("Application flash failed: %d", result);
+    }
     rom_flash_flush_cache();
 }
 void loader_flash_erase(uint32_t offset, size_t count) {

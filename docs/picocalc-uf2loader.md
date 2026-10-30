@@ -82,3 +82,15 @@ check_keyboard_init.py tests real startup code with a timing-sensitive mock,
 transient write/read failures and bounded permanent failure, and compiles the
 actual I2C1 transaction statements to enforce the 16 ms response gap. Tests
 pass with ASan/UBSan. The saved-option layout and loader reservation are unchanged.
+
+## SD3 diagnostic follow-up
+
+User reports SD2 still has no keyboard input and no blinking cursor. The
+keyboard-only timing hypothesis is not established as the cause. SD3-diag
+adds direct-to-display startup checkpoints, bypassing network console output:
+filesystem boot update, Wi-Fi architecture initialization, WebConnect, IRQ
+mask and 30 ms timer progress at prompt entry, then the first web/routine/input
+poll. ROM flash failures print their return code, offset and length before
+the existing fail-stop panic. It makes no further speculative runtime repair.
+Read the last [SD3] line on screen to locate the stall. SD3 is diagnostic,
+not a validated keyboard or startup fix. It uses the same saved-data layout.
