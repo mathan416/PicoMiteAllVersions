@@ -141,3 +141,17 @@ Retest Telnet reconnects, a refused second console, larger TFTP transfers, and
 Home Assistant reads separately. The PicoCalc STM32 keyboard-controller
 firmware is outside this patch's scope; there is no evidence yet that it needs
 updating.
+
+## netfix2: outbound TCP connection crash
+
+Tricorder investigation found `tcp_client_open` calling `sprintf` without its
+`buff` destination argument. The format literal was passed as the destination,
+the IP string as the format, and the result buffer remained unused. On the
+RP2350 this attempts to write into flash-mapped read-only storage whenever a
+BASIC program opens a TCP client, regardless of WEB MESSAGES suppression.
+Use bounded `snprintf(buff, sizeof(buff), ...)` with the correct destination.
+The regression check extracts the real formatting statement, compiles it with
+format warnings treated as errors, and verifies the complete formatted result.
+This is a confirmed source defect; hardware crash attribution remains pending
+testing the new firmware. The device's `tricorder.bas` was also found empty;
+that separate transfer failure explains why RUN of that file returned immediately.

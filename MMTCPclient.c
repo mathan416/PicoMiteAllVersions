@@ -144,7 +144,7 @@ static err_t tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err) {
 static bool tcp_client_open(void *arg) {
     TCP_CLIENT_T *state = (TCP_CLIENT_T*)arg;
     char buff[STRINGSIZE]={0};
-    sprintf("Connecting to %s port %u\r\n", ip4addr_ntoa(&state->remote_addr), state->TCP_PORT);
+    snprintf(buff, sizeof(buff), "Connecting to %s port %u\r\n", ip4addr_ntoa(&state->remote_addr), (unsigned)state->TCP_PORT);
     if(!optionsuppressstatus)MMPrintString(buff);
     state->tcp_pcb = tcp_new_ip_type(IP_GET_TYPE(&state->remote_addr));
     if (!state->tcp_pcb) {
