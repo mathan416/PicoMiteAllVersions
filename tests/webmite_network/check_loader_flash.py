@@ -38,7 +38,6 @@ struct mock_qmi *qmi_hw=&mapping;
 static unsigned char flash[PICO_FLASH_SIZE_BYTES];
 static jmp_buf failure;
 static int rom_error, calls, flushes;
-void SDTrace(const char *text){(void)text;}
 void panic(const char *msg, ...) {(void)msg; longjmp(failure,1);}
 int rom_flash_op(cflash_flags_t flags, uintptr_t addr, uint32_t count, uint8_t *buf) {
   assert((flags.flags & (1u << CFLASH_ASPACE_LSB)) != 0);

@@ -110,3 +110,12 @@ before registering the 1 ms repeating timer, only in the opt-in SD build.
 The ordinary USB build remains unchanged. Diagnostics remain: the first hardware
 acceptance test is irqmask=0, nonzero advancing ticks, blinking cursor and typing.
 This change is source- and photo-supported; hardware confirmation is pending.
+
+## Clean SD4 image
+
+User confirmed SD4 has a blinking cursor and working keyboard. Removed the
+on-screen SDTrace startup/input diagnostics and their temporary 30 ms timer
+probe. Retained the IRQ-enable boundary, partition-aware flash operations,
+capacity bounds and keyboard startup/poll fixes. The normal version banner
+and genuine firmware errors remain. Wi-Fi/tricorder restoration on SD4 is
+the next integration test. No source or saved-data layout migration is added.
