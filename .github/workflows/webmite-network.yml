@@ -7,7 +7,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: python3 tests/webmite_network/run_tests.py
+      - run: |
+          python3 tests/webmite_network/run_tests.py
+          python3 tests/webmite_network/check_options_storage.py
   firmware-build:
     needs: host-tests
     runs-on: ubuntu-24.04

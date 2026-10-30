@@ -34,9 +34,34 @@ reconnections, table capacity, second-console rejection, dead-PCB cleanup,
 close failure/abort propagation, every packet split of negotiation plus input, chained pbufs,
 control commands, and disconnect during transmit polling.
 
-## Saved Wi-Fi settings: still under investigation
+## Confirmed saved-options writer defects
 
-These fixes address confirmed memory-safety and connection defects. They do
+`struct option_s` is packed and is **897 bytes** in the PicoCalc WebMite build.
+The original `SaveOptions()` passes that exact length to `flash_range_program`,
+whose SDK contract requires a multiple of the 256-byte page size. This is also
+confirmed in the supplied UF2: instruction `0x1001d84c` loads 897 into the length
+argument before the flash-program call. The page-length violation is therefore
+present in the published binary, not just inferred from a different rebuild.
+
+The writer now snapshots all option bytes into a 4-byte-aligned RAM buffer,
+pads with erased `0xff` to **1024 bytes**, and statically checks that this record
+fits the reserved sector. This preserves the existing packed layout, magic,
+field offsets, and flash addresses. It does not write adjacent program flash.
+
+`OPTION DISK LOAD` also programmed a hard-coded 768 bytes after reading the
+larger options record. It now uses the common complete writer, preserving the
+record's trailing bytes instead of truncating them. Neither change introduces
+a new options format or clears credentials.
+
+A host test compiles the actual packed structure and writer with ASan/UBSan.
+The exact release fails the flash-page contract at 897 bytes; the patched writer
+preserves all 897 bytes, uses a 1024-byte write, and leaves the padding erased.
+This fixes a concrete storage defect, but does not prove it caused the reported
+credential loss on the device. No failing option-sector dump was captured.
+
+## Saved Wi-Fi loss: actual triggering path still under investigation
+
+These fixes address confirmed memory-safety, connection, and flash-write defects. They do
 **not** establish the cause of reported Wi-Fi settings loss after reboot.
 Neither the BASIC applications nor these changes explicitly reset Wi-Fi.
 
@@ -74,6 +99,7 @@ the older GCC 9 rejects declarations following labels in existing source.
 
 ```sh
 python3 tests/webmite_network/run_tests.py
+python3 tests/webmite_network/check_options_storage.py
 python3 tests/webmite_network/check_layout_guard.py
 cmake -S . -B build -DPICO_SDK_PATH=/path/to/pico-sdk -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
@@ -81,13 +107,15 @@ cmake --build build --parallel 4
 
 The layout test requires `arm-none-eabi-gcc` and `arm-none-eabi-ld` in PATH, or
 `ARM_CC` and `ARM_LD` set to their paths. Host tests require Python 3 and Clang
-with ASan/UBSan. CI runs both test suites and the PicoCalc WebMite build.
+with ASan/UBSan. CI runs all three test suites and the PicoCalc WebMite build.
+To reproduce the original storage defect in a clone containing the release tag,
+run `python3 tests/webmite_network/check_options_storage.py --reproduce-release`.
 
 ## Local build result
 
 The size-optimised candidate builds with SDK 2.1.1 (the four documented SDK
 replacements) and Arm GNU 14.2.rel1. In this local build its ELF flash end is
-`0x1010de68`, leaving 408 bytes before the options sector; the padded UF2
+`0x1010de10`, leaving 496 bytes before the options sector; the padded UF2
 application ends at `0x1010df00`. The linker guard is mandatory because that
 margin is small and compiler/build differences change image size. An earlier
 unoptimised attempt was rejected by the guard rather than packaged as safe.
@@ -100,8 +128,8 @@ No binary is published as a tested firmware release by this branch.
 ## Hardware validation required
 
 A successful host test or compile is not an on-device validation. No candidate
-has been flashed as part of this investigation, and no fix for the Wi-Fi wipe
-is claimed. Before any flash, back up programs and options through a local
+has been flashed as part of this investigation, and no claim is made that the complete Wi-Fi-loss symptom is
+resolved. Before any flash, back up programs and options through a local
 console; option backups can contain credentials and must stay private.
 
 The next controlled hardware check should record firmware version, reset cause,
