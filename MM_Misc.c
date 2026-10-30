@@ -4653,14 +4653,7 @@ tp = checkstring(cmdline, (unsigned char *)"HEARTBEAT");
         }
         Option.Magic=MagicKey; //This isn't ideal but it improves the chances of a older config working in a new build
         FileClose(fnbr);
-        uSec(100000);
-        disable_interrupts_pico();
-        flash_range_erase(FLASH_TARGET_OFFSET, FLASH_ERASE_SIZE);
-        enable_interrupts_pico();
-        uSec(10000);
-        disable_interrupts_pico();
-        flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)&Option, 768);
-        enable_interrupts_pico();
+        SaveOptions();
         _excep_code = RESET_COMMAND;
         SoftReset();
     }

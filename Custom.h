@@ -108,12 +108,13 @@ extern char *pioTXinterrupts[4][3];
     extern TCP_SERVER_T *TCPstate;
     extern void cleanserver(void);
     extern err_t tcp_server_close(void *arg, int pcb);
+    extern void tcp_server_forget(void *arg, int pcb);
     extern err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb, int pcb);
     extern void checksent(void *arg, int fn, int pcb);
     extern TCP_CLIENT_T *TCP_CLIENT;
     extern TCP_CLIENT_T* tcp_client_init(void);
     extern void tcp_dns_found(const char *hostname, const ip_addr_t *ipaddr, void *arg);
-    extern void starttelnet(struct tcp_pcb *client_pcb, int pcb, void *arg);
+    extern err_t starttelnet(struct tcp_pcb *client_pcb, int pcb, void *arg);
     extern char *UDPinterrupt;
     extern volatile bool UDPreceive;
 #endif

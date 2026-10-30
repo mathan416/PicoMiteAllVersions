@@ -5484,13 +5484,21 @@ void ClearSavedVars(void)
 }
 void SaveOptions(void)
 {
+    /* PicoCalc's packed options are 897 bytes, not a whole flash page.
+     * Keep the on-flash layout, but never read past Option or program a
+     * partial page. The complete record must fit in its reserved sector. */
+    _Alignas(4) uint8_t record[((sizeof(struct option_s) + FLASH_PAGE_SIZE - 1)
+                              / FLASH_PAGE_SIZE) * FLASH_PAGE_SIZE];
+    _Static_assert(sizeof(record) <= FLASH_ERASE_SIZE, "Options exceed reserved flash sector");
+    memset(record, 0xff, sizeof(record));
+    memcpy(record, &Option, sizeof(Option));
     uSec(100000);
     disable_interrupts_pico();
     flash_range_erase(FLASH_TARGET_OFFSET, FLASH_ERASE_SIZE);
     enable_interrupts_pico();
     uSec(10000);
     disable_interrupts_pico();
-    flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)&Option, sizeof(struct option_s));
+    flash_range_program(FLASH_TARGET_OFFSET, record, sizeof(record));
     enable_interrupts_pico();
 }
 /*  @endcond */
