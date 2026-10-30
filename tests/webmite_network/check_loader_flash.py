@@ -5,7 +5,13 @@ root = pathlib.Path(__file__).resolve().parents[2]
 header = r'''#include <stdint.h>
 #include <stddef.h>
 #define PICO_RP2350 1
-#define PICO_FLASH_SIZE_BYTES (4u*1024u*1024u)
+#define PICO_FLASH_SIZE_BYTES (16u*1024u*1024u)
+#define PT_INFO_PARTITION_LOCATION_AND_FLAGS 16u
+#define PT_INFO_SINGLE_PARTITION 0x8000u
+#define PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_BITS 0x1fffu
+#define PICOBIN_PARTITION_LOCATION_FIRST_SECTOR_LSB 0
+#define PICOBIN_PARTITION_LOCATION_LAST_SECTOR_BITS 0x3ffe000u
+#define PICOBIN_PARTITION_LOCATION_LAST_SECTOR_LSB 13
 #define FLASH_SECTOR_SIZE 4096u
 #define FLASH_PAGE_SIZE 256u
 #define XIP_BASE 0x10000000u
@@ -23,6 +29,8 @@ typedef struct {uint32_t flags;} cflash_flags_t;
 struct mock_qmi {uint32_t atrans[8];};
 extern struct mock_qmi *qmi_hw;
 void panic(const char *, ...);
+int rom_get_partition_table_info(uint32_t *, uint32_t, uint32_t);
+int rom_load_partition_table(uint8_t *, uint32_t, int);
 int rom_flash_op(cflash_flags_t, uintptr_t, uint32_t, uint8_t *);
 void rom_flash_flush_cache(void);
 '''
@@ -35,10 +43,20 @@ case = r'''#include <assert.h>
 #include "LoaderFlash.h"
 static struct mock_qmi mapping;
 struct mock_qmi *qmi_hw=&mapping;
-static unsigned char flash[PICO_FLASH_SIZE_BYTES];
+static unsigned char flash[4u*1024u*1024u];
+static int table_ready, loads;
+int rom_get_partition_table_info(uint32_t *info,uint32_t count,uint32_t flags){
+ assert(count==3 && flags==(16u|0x8000u));
+ if(!table_ready)return -18;
+ info[0]=16;info[1]=2u|(1023u<<13);info[2]=0;return 3;
+}
+int rom_load_partition_table(uint8_t *area,uint32_t size,int force){
+ assert(area && size==4096 && !force);table_ready=1;loads++;return 0;
+}
 static jmp_buf failure;
 static int rom_error, calls, flushes;
 void panic(const char *msg, ...) {(void)msg; longjmp(failure,1);}
+void loader_flash_failure(int result,uint32_t offset,uint32_t count){assert(result==-4 && offset==0 && count==4096);longjmp(failure,1);}
 int rom_flash_op(cflash_flags_t flags, uintptr_t addr, uint32_t count, uint8_t *buf) {
   assert((flags.flags & (1u << CFLASH_ASPACE_LSB)) != 0);
   assert((flags.flags & (1u << CFLASH_SECLEVEL_LSB)) != 0);
@@ -54,7 +72,7 @@ void rom_flash_flush_cache(void){flushes++;}
 #define REJECT(code) do {int before=calls; if(!setjmp(failure)){code;assert(!"invalid operation accepted");} assert(calls==before);}while(0)
 int main(void){
   uint8_t data[1024];memset(data,0x39,sizeof data);memset(flash,0xa5,sizeof flash);
-  assert(loader_flash_size()==sizeof flash);
+  REJECT(loader_flash_size());
   mapping.atrans[0]=2;
   uint32_t capacity=loader_flash_size();assert(capacity==sizeof flash-8192);
   loader_flash_erase(0x10e000,4096);
@@ -66,6 +84,8 @@ int main(void){
   loader_flash_program(capacity-256,data,256);
   assert(!memcmp(flash+sizeof flash-256,data,256));
   assert(flushes==calls);
+  assert(loads==1);
+  mapping.atrans[0]=3; REJECT(loader_flash_size()); mapping.atrans[0]=2;
   REJECT(loader_flash_program(capacity,data,256));
   REJECT(loader_flash_program(0,data,897));
   REJECT(loader_flash_program(1,data,256));
@@ -76,13 +96,13 @@ int main(void){
   int before=flushes;rom_error=-4;
   if(!setjmp(failure)){loader_flash_erase(0,4096);assert(!"ROM failure ignored");}
   assert(flushes==before);
-  puts("PASS: runtime translation preserves loader; exact aligned writes, bounds, overflow, ROM errors, cache flush");
+  puts("PASS: 16 MB compile maximum restricted to 4 MB ROM partition; runtime translation preserves loader; exact aligned writes, bounds, overflow, ROM errors, cache flush");
 }
 '''
 with tempfile.TemporaryDirectory() as folder:
     d=pathlib.Path(folder)
     (d/"stub.h").write_text("#pragma once\n"+header)
-    for name in ["pico/stdlib.h","pico/bootrom.h","hardware/flash.h","hardware/structs/qmi.h"]:
+    for name in ["pico/stdlib.h","pico/bootrom.h","hardware/flash.h","hardware/structs/qmi.h","boot/picobin.h"]:
         p=d/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('#include "stub.h"\n')
     (d/"case.c").write_text(case)
     subprocess.run(["cc","-Wall","-Wextra","-Werror","-fsanitize=address,undefined","-I",str(d),"-I",str(root),str(root/"LoaderFlash.c"),str(d/"case.c"),"-o",str(d/"check")],check=True)

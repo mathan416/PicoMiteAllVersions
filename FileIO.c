@@ -342,7 +342,11 @@ void ErrorThrow(int e, int type)
 }
 void ResetFlashStorage(int umount){
     int boot_count=0;
-    if(umount)lfs_unmount(&lfs); 
+    if(umount)lfs_unmount(&lfs);
+#ifdef PICOCALC_UF2LOADER
+    /* Explicit A:/FORMAT exits legacy recovery using the corrected size. */
+    pico_lfs_cfg.block_count = (Option.FlashSize-RoundUpK4(TOP_OF_SYSTEM_FLASH)-(Option.modbuff ? 1024*Option.modbuffsize : 0))/4096;
+#endif
     FSerror=lfs_format(&lfs, &pico_lfs_cfg);ErrorCheck(0);
     FSerror=lfs_mount(&lfs, &pico_lfs_cfg);	ErrorCheck(0);
     int fnbr = FindFreeFileNbr();
@@ -362,16 +366,34 @@ void ResetFlashStorage(int umount){
 int __not_in_flash_func(fs_flash_read)(const struct lfs_config *cfg, lfs_block_t block,
         lfs_off_t off, void *buffer, lfs_size_t size)
 {
+#ifdef PICOCALC_UF2LOADER
+    size_t fs_start = RoundUpK4(TOP_OF_SYSTEM_FLASH) + (Option.modbuff ? 1024u*Option.modbuffsize : 0u);
+    size_t location = fs_start + (size_t)block * 4096u + off;
+    if (block >= cfg->block_count || off > 4096u || size > 4096u - off ||
+        location > UINT32_MAX || !loader_flash_contains((uint32_t)location, size))
+        return LFS_ERR_IO;
+#endif
+
     assert(off  % cfg->read_size == 0);
     assert(size % cfg->read_size == 0);
     assert(block < cfg->block_count);
     uint32_t addr = XIP_BASE + RoundUpK4(TOP_OF_SYSTEM_FLASH) + (Option.modbuff ? 1024*Option.modbuffsize : 0) + block*4096 + off;
-    memcpy(buffer,(char *)addr,size);
+    memcpy(buffer,(const void *)(uintptr_t)addr,size);
     return 0;
 }
 int __not_in_flash_func(fs_flash_prog)(const struct lfs_config *cfg, lfs_block_t block,
             lfs_off_t off, const void *buffer, lfs_size_t size)
 {
+#ifdef PICOCALC_UF2LOADER
+    size_t fs_start = RoundUpK4(TOP_OF_SYSTEM_FLASH) + (Option.modbuff ? 1024u*Option.modbuffsize : 0u);
+    size_t location = fs_start + (size_t)block * 4096u + off;
+    if (block >= cfg->block_count || off > 4096u || size > 4096u - off ||
+        location > UINT32_MAX || !loader_flash_contains((uint32_t)location, size))
+        return LFS_ERR_IO;
+    if (cfg->block_count > (loader_flash_size() - fs_start) / 4096u)
+        return LFS_ERR_IO; /* Oversized legacy filesystem: recovery reads only. */
+#endif
+
     assert(off  % cfg->prog_size == 0);
     assert(size % cfg->prog_size == 0);
     assert(block < cfg->block_count);
@@ -383,6 +405,16 @@ int __not_in_flash_func(fs_flash_prog)(const struct lfs_config *cfg, lfs_block_t
     return 0;
 }
 int __not_in_flash_func(fs_flash_erase)(const struct lfs_config *cfg, lfs_block_t block){
+#ifdef PICOCALC_UF2LOADER
+    size_t fs_start = RoundUpK4(TOP_OF_SYSTEM_FLASH) + (Option.modbuff ? 1024u*Option.modbuffsize : 0u);
+    size_t location = fs_start + (size_t)block * 4096u + 0u;
+    if (block >= cfg->block_count ||
+        location > UINT32_MAX || !loader_flash_contains((uint32_t)location, 4096u))
+        return LFS_ERR_IO;
+    if (cfg->block_count > (loader_flash_size() - fs_start) / 4096u)
+        return LFS_ERR_IO; /* Oversized legacy filesystem: recovery reads only. */
+#endif
+
     assert(block < cfg->block_count);
 
     uint32_t block_addr = RoundUpK4(TOP_OF_SYSTEM_FLASH) + (Option.modbuff ? 1024*Option.modbuffsize : 0) + block*4096;

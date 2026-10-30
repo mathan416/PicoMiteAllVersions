@@ -1,60 +1,92 @@
-# SD5: A: TFTP fault investigation
+# SD6: bounded A: flash access and recovery
 
-Observed on clean SD4: A: TFTP upload triggers Invalid address - resetting;
-B: transfers and checksum verification succeed. Reproduced with status output
-suppressed and no concurrent BASIC filesystem commands. Partition-aware
-filesystem boot-count writes and a live SD-based tricorder scan succeeded.
+SD6 is a hardware-test candidate, not a confirmed repair. SD4 is retained as
+recovery. No loader reinstall, partition-table change or full-flash erase is
+required. Existing A: contents must be backed up before explicitly formatting
+an oversized filesystem. Applications and the private HA token are on B:.
 
-## Confirmed build defect
+## Evidence
 
-CMake requests PICO_CORE0_STACK_SIZE=0x4000, but SDK 2.1.1 crt0.S uses
-PICO_STACK_SIZE. SD4 ELF __StackBottom=0x20081800 and __StackTop=0x20082000:
-only 2048 bytes. SDK newlib installs the M33 MSPLIM guard at __StackBottom.
-A TFTP callback adds lwIP/CYW43 stack depth to littlefs and ROM-flash operations,
-which may explain why this path faults while B: and ordinary A: writes do not.
-That causal attribution is a hypothesis until SD5 hardware tests/fault capture.
+SD4 A: TFTP upload resets; B: transfers and tricorder scans succeed. SD5
+reserves a verified 16 KiB stack instead of SD4's unintended 2 KiB. On SD5,
+32-byte and empty-file uploads and downloads passed byte-for-byte. A 512-byte
+upload then timed out and the board restarted. The photo reported CFSR=0,
+SP=20081BB8, PC=0, with no STKOF indication. A stack overflow is therefore
+not established as the cause of this failure.
 
-SD5 reserves 16 KiB using PICO_STACK_SIZE and a pinned SDK 2.1.1 linker script.
-The stack is 0x2007e000..0x20082000. The C heap ends at 0x2007e000; assertions
-exclude overlap with heap, static data, scratch sections or a core1 stack.
-WebMite remains single-core. The flash partition map, filesystem offsets,
-TFTP callbacks and saved-option record layout are unchanged for this test.
-The previous working SD4 firmware is retained for recovery.
+The running SD5 firmware reports 16769024 for MM.INFO(OPTION FLASH SIZE):
+16 MB minus the loader's 8 KB. Pico 2 W has 4 MB; the correct application
+capacity is 4186112. The historical CMake 16 MB override leaked into the
+loader adapter, which mistook a compile maximum for physical capacity.
+LittleFS could allocate blocks beyond the mapped application partition.
+The earlier mock used a 4 MB compile constant and missed this integration bug.
 
-## Fault capture
+The user-supplied Raspberry Pi forum thread 391477 describes a related
+address-translation problem with a separate data partition. Our loader maps
+one application partition containing both executable and filesystem, so a
+separate untranslated data-read window is not needed here. The invalid
+capacity instead permitted reads/writes outside that existing mapping.
 
-The HardFault entry stub first selects the interrupted MSP/PSP, then switches
-to a separate 1 KiB emergency stack with the stack limit cleared. CFSR, original
-SP and (when the exception frame is valid) fault PC are written to watchdog
-scratch 0..3 under a magic distinct from UF2 Loader's command magic. SDK reboot
-uses scratch4..7. It triggers a watchdog restart without filesystem access,
-network callbacks or saved-option writes. On the next boot the registers are
-printed once, and autorun is disabled in RAM so the report is readable.
-Incomplete/overflowed exception frames are not dereferenced. STKOF is reported
-as Hardware stack limit exceeded. No normal-startup diagnostic chatter is added.
+## Changes
+
+- Query ROM partition 0 location/flags; require the loader's 8 KB application
+  start, matching QMI mapping and an end within the Pico 2 W's 4 MB flash.
+  Cache the validated capacity. Load the partition table if not resident;
+  isolate the rare 4 KB workarea in a non-inlined helper. Invalid tables fail
+  closed. SD builds no longer compile with the legacy 16 MB override.
+- LittleFS callbacks reject reads, programming and erases outside real flash
+  before touching XIP or invoking ROM. Legacy oversized geometry rejects all
+  programming/erases, including metadata and boot-count writes.
+- If mounting at the corrected size fails with a geometry mismatch, try the
+  exact prior SD4/SD5 geometry for read-only recovery. In-range files remain
+  available for backup; inaccessible blocks return I/O errors.
+- Failed mounts no longer cause automatic formatting. Only an entirely erased
+  filesystem region can initialize automatically. Nonblank incompatible or
+  corrupt data is preserved. Public LittleFS calls reject unmounted state
+  instead of entering partially deinitialized state. This guard is scoped to
+  the SD build's single filesystem instance.
+- Explicit A:/FORMAT recomputes block_count from the corrected option size,
+  permitting a backed-up legacy volume to be recreated. SD6 does not perform
+  that operation automatically.
+- Fault decoding now handles the basic core frame before optional FP state,
+  DCRS security-context words, and secure/nonsecure stack selection. If CFSR
+  is zero, report HFSR instead. ROM flash failures preserve the result code,
+  offset and byte count under a separate watchdog magic. Reporting is once
+  only; autorun is suppressed in RAM. No settings or filesystem fault writes.
+
+The existing 16 KiB stack, startup IRQ/keyboard fix, filesystem start, saved
+options record, partition table and TFTP implementation remain in place.
 
 ## Validation
 
-- check_stack_layout.py rejects the SD4 2 KiB ELF and accepts the linked SD5
-  16 KiB reservation, heap/BSS separation and SRAM top.
-- check_fault_capture.py exercises actual record/report code under ASan/UBSan,
-  including ordinary/extended frames, invalid/overflowed frame and once-only
-  reporting. ARM disassembly confirms no stack push before emergency switch.
-- Startup-IRQ, saved-options and flash-adapter regression checks pass.
-- Full SD5 build and saved-options flash layout assertion pass.
+ASan/UBSan host tests exercise the actual loader adapter with a 16 MB compile
+maximum and a 4 MB ROM partition; the actual LittleFS block callbacks; and the
+actual LittleFS implementation/recovery helper. Cases include boundary and
+misaligned requests, ROM errors, loader preservation, legacy inline-file
+recovery with byte-for-byte media preservation, damaged nonblank volumes,
+erased roots with remaining data, blank initialization and API calls after
+failed mounts. Fault tests cover basic, FP and security-context frames,
+incomplete frames, HFSR and ROM flash-error reporting.
 
-## Hardware test sequence
+All prior network, options, TCP status, linker-layout, keyboard and startup-IRQ
+regressions pass. The built ELF retains a 16384-byte stack and the link-time
+saved-options boundary assertion passes. UF2 structure/address checks are
+recorded in the packaged build manifest. Hardware validation is pending.
 
-1. Select SD5 from the existing loader; confirm cursor, keyboard and Wi-Fi.
-2. Keep one console session open and use OPTION WEB MESSAGES OFF (RAM only).
-3. Leave BASIC at its prompt; do not run simultaneous filesystem commands.
-4. Upload a new 32-byte test file to A:, then read back and compare bytes.
-5. Repeat with 512 bytes, 513 bytes and a multi-block file, using unique test
-   filenames. Verify data before deleting only these test files.
-6. Test missing-file, repeated overwrite, client cancellation and reconnect;
-   confirm normal protocol errors, not crashes. Retest B: as a control.
-7. Power cycle; verify Wi-Fi/options and loader menu reentry, then tricorder.
-8. If it faults, capture the Previous fault line before another restart.
+## Hardware sequence
 
-This is a test candidate, not a hardware-validated fix. No repartitioning or
-formatting is part of SD5. Do not change partitioning without contrary evidence.
+1. Copy the SD6_TEST UF2 into pico2-apps/ on the existing SD card and select it
+   from the loader (hold Up at power-on). Keep SD4 as recovery; do not replace
+   BOOT2350.UF2 or erase/repartition flash.
+2. Confirm cursor/keyboard and network. If needed enable Telnet/TFTP. Check
+   PRINT MM.INFO(OPTION FLASH SIZE): expected 4186112.
+3. If A: reports read-only recovery, list and back up its recoverable contents
+   to B:/the Mac. Do not attempt A: uploads yet. Inspect the backup before
+   explicitly recreating A: with DRIVE "A:/FORMAT".
+4. With a writable A:, one console idle at the BASIC prompt and status
+   messages suppressed, upload/download unique files of 32, 512, 513 and
+   32768 bytes and compare every byte. Stop at the first failure. No concurrent
+   BASIC filesystem commands during transfers.
+5. Check overwrite, missing-file, client cancellation and reconnection;
+   retest B: as a control. Power-cycle, verify saved Wi-Fi/options, loader
+   reentry and the B: tricorder. Record any Previous fault/flash error report.

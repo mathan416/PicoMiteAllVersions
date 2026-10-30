@@ -3929,12 +3929,26 @@ void MIPS16 updatebootcount(void){
     pico_lfs_cfg.block_count = (Option.FlashSize-RoundUpK4(TOP_OF_SYSTEM_FLASH)-(Option.modbuff ? 1024*Option.modbuffsize : 0))/4096;
     int err,boot_count=0;
  	    err= lfs_mount(&lfs, &pico_lfs_cfg);
-    // reformat if we can't mount the filesystem
-    // this should only happen on the first boot
+#ifdef PICOCALC_UF2LOADER
+    /* Never erase an existing filesystem merely because mounting failed. */
+    extern int loader_filesystem_recover(lfs_t *, struct lfs_config *, int);
+    err = loader_filesystem_recover(&lfs, &pico_lfs_cfg, err);
+    if (err == 1) {
+        MMPrintString("A: legacy size; read-only recovery. Use B: for files.\r\n");
+        return;
+    }
+    if (err < 0) {
+        MMPrintString("A: unavailable; preserved. Use B: for files.\r\n");
+        return;
+    }
+#else
+    // Historical behavior for other firmware builds.
     if (err) {
         err=lfs_format(&lfs, &pico_lfs_cfg);
-        err=lfs_mount(&lfs, &pico_lfs_cfg);
+        if (!err) err=lfs_mount(&lfs, &pico_lfs_cfg);
     }
+    if (err) return;
+#endif
 
     err=lfs_file_open(&lfs, &lfs_file, "bootcount", LFS_O_RDWR | LFS_O_CREAT);;
     int dt=get_fattime();

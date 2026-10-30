@@ -9,7 +9,7 @@ def function(name):
   if s[end]=="}":
    level-=1
    if not level:return s[start:end+1]
-record=function("loader_fault_record");report=function("loader_report_previous_fault")
+record=function("loader_fault_record");report=function("loader_report_previous_fault");flash=function("loader_flash_failure")
 program=r'''#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -18,10 +18,12 @@ program=r'''#include <stdint.h>
 #include <stdio.h>
 #define __not_in_flash_func(x) x
 #define FAULT_MAGIC 0x50434654u
+#define FLASH_FAULT_MAGIC 0x5043464cu
+#define HFSR_MARKER 0x20000000u
 static uint32_t frame_data[64];
 #define SRAM_BASE ((uintptr_t)frame_data)
 #define SRAM_END ((uintptr_t)(frame_data+64))
-struct {uint32_t cfsr;} scb,*m33_hw=&scb;
+struct {uint32_t cfsr,hfsr;} scb,*m33_hw=&scb;
 struct {uint32_t scratch[8];} wd,*watchdog_hw=&wd;
 struct {int Autorun;} Option;
 static jmp_buf reboot;
@@ -31,19 +33,28 @@ void tight_loop_contents(void){assert(!"reboot returned");}
 void MMPrintString(const char *s){(void)s;reports++;}
 void PIntH(uint32_t n){(void)n;}
 void PRet(void){}
-'''+record+"\n"+report+r'''
+'''+record+"\n"+flash+"\n"+report+r'''
 int main(void){
  frame_data[6]=0x10012345;
- if(!setjmp(reboot))loader_fault_record(frame_data,16);
- assert(wd.scratch[0]==FAULT_MAGIC&&wd.scratch[1]==0&&wd.scratch[3]==0x10012345);
+ if(!setjmp(reboot))loader_fault_record(frame_data,0x70);
+ assert(wd.scratch[0]==FAULT_MAGIC&&wd.scratch[1]==HFSR_MARKER&&wd.scratch[3]==0x10012345);
  Option.Autorun=1;loader_report_previous_fault();assert(!wd.scratch[0]&&!Option.Autorun&&reports);
  int saved=reports;loader_report_previous_fault();assert(reports==saved);
  scb.cfsr=0x00100000;
- if(!setjmp(reboot))loader_fault_record((uint32_t *)1,16);
+ if(!setjmp(reboot))loader_fault_record((uint32_t *)1,0x70);
  assert(wd.scratch[1]==0x00100000&&wd.scratch[2]==1&&wd.scratch[3]==0);
- scb.cfsr=0;frame_data[24]=0x10056789;
+ scb.cfsr=0;frame_data[16]=0x10056789;
  if(!setjmp(reboot))loader_fault_record(frame_data,0);
  assert(wd.scratch[3]==0x10056789);
+ // An extended floating point frame still starts with the core registers.
+ if(!setjmp(reboot))loader_fault_record(frame_data,0x60);
+ assert(wd.scratch[3]==0x10012345);
+ scb.hfsr=0x80000000u;
+ if(!setjmp(reboot))loader_fault_record(frame_data,0x70);
+ assert(wd.scratch[1]==(HFSR_MARKER|0x80000000u));
+ if(!setjmp(reboot))loader_flash_failure(-4,0x102000,4096);
+ assert(wd.scratch[0]==FLASH_FAULT_MAGIC && wd.scratch[1]==(uint32_t)-4 && wd.scratch[2]==0x102000 && wd.scratch[3]==4096);
+ loader_report_previous_fault();assert(!wd.scratch[0]);
  puts("PASS: fault registers survive reboot; incomplete stack frames are not read; report is once-only and disables autorun in RAM");
 }
 '''

@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.13)
 # Valid builds are PICO, PICOUSB, VGA, VGAUSB, HDMI(rp2350 only), HDMIUSB(rp2350 only), WEB
 
 set(PICOCALC true)
+option(PICOCALC_UF2LOADER "Partition-aware flash for PicoCalc UF2 Loader" OFF)
 # For dynamic loading from SD card:
 # SDBOOT requires the bootloader to be in the first 256KB of flash
 # PicoMite will need to be shifted by this amount, and all references to
@@ -172,7 +173,7 @@ target_compile_options(PicoMite PRIVATE -DNDEBUG
 										-DPICO_XOSC_STARTUP_DELAY_MULTIPLIER=64 
 										-DPICO_CLOCK_AJDUST_PERI_CLOCK_WITH_SYS_CLOCK
 										-DPICO_XOSC_STARTUP_DELAY_MULTIPLIER=64 
-										-DPICO_FLASH_SIZE_BYTES=16777216
+										 $<$<NOT:$<BOOL:${PICOCALC_UF2LOADER}>>:-DPICO_FLASH_SIZE_BYTES=16777216>
 										-DPICO_CORE1_STACK_SIZE=0x00
 										-DPICO_MALLOC_PANIC
 										-O2
@@ -293,12 +294,11 @@ if(COMPILE STREQUAL "WEB" OR COMPILE STREQUAL "WEBRP2350")
 endif()
 
 # Separate candidate: preserve the USB-only netfix2 configuration by default.
-option(PICOCALC_UF2LOADER "Partition-aware flash for PicoCalc UF2 Loader" OFF)
 if(PICOCALC_UF2LOADER)
     if(NOT COMPILE STREQUAL "WEBRP2350")
         message(FATAL_ERROR "SD compatibility is currently scoped to WEBRP2350")
     endif()
-    target_sources(PicoMite PRIVATE LoaderFlash.c)
+    target_sources(PicoMite PRIVATE LoaderFlash.c LoaderFilesystem.c)
     # This WebMite build does not launch core1. SDK flash_safe_execute must
     # treat the unused core as safe rather than waiting for a lockout victim.
     target_compile_definitions(PicoMite PRIVATE PICOCALC_UF2LOADER=1 PICO_FLASH_ASSUME_CORE1_SAFE=1)
