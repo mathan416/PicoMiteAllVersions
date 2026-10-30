@@ -94,3 +94,19 @@ poll. ROM flash failures print their return code, offset and length before
 the existing fail-stop panic. It makes no further speculative runtime repair.
 Read the last [SD3] line on screen to locate the stall. SD3 is diagnostic,
 not a validated keyboard or startup fix. It uses the same saved-data layout.
+
+## SD4: inherited interrupt mask
+
+User's SD3 photo shows filesystem update and Wi-Fi initialization completed,
+and input polling returns. At prompt entry it reports irqmask=1 and ticks=0.
+This confirms the Cortex interrupt mask is set and the 1 ms callback is not
+advancing, explaining both the stationary cursor and keyboard poll countdown.
+SDK 2.1.1 rom_chain_image() calls save_and_disable_interrupts before invoking
+the ROM chain function; successful transfer does not return through its restore.
+The application must establish its expected interrupt state.
+
+SD4 calls restore_interrupts(0) after normal runtime/vector setup and immediately
+before registering the 1 ms repeating timer, only in the opt-in SD build.
+The ordinary USB build remains unchanged. Diagnostics remain: the first hardware
+acceptance test is irqmask=0, nonzero advancing ticks, blinking cursor and typing.
+This change is source- and photo-supported; hardware confirmation is pending.

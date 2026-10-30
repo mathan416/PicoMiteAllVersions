@@ -30,7 +30,7 @@ list all
 
 
 #ifdef PICOCALC_UF2LOADER
-#define VERSION         "6.00.03-netfix2-sd3-diag"
+#define VERSION         "6.00.03-netfix2-sd4"
 #else
 #define VERSION         "6.00.03-netfix2"
 #endif			    // define the version number

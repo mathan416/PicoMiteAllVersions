@@ -550,17 +550,17 @@ int __not_in_flash_func(getConsole)(void) {
     int c=-1;
 #ifdef PICOCALC_UF2LOADER
     int trace = sd_trace_input == 1;
-    if (trace) { sd_trace_input = 2; SDTrace("[SD3] input: web poll\r\n"); }
+    if (trace) { sd_trace_input = 2; SDTrace("[SD4] input: web poll\r\n"); }
 #endif
 #ifdef PICOMITEWEB
     ProcessWeb(1);
 #endif
 #ifdef PICOCALC_UF2LOADER
-    if (trace) SDTrace("[SD3] input: routine checks\r\n");
+    if (trace) SDTrace("[SD4] input: routine checks\r\n");
 #endif
     CheckAbort();
 #ifdef PICOCALC_UF2LOADER
-    if (trace) { SDTrace("[SD3] input: poll returned\r\n"); sd_trace_input = 0; }
+    if (trace) { SDTrace("[SD4] input: poll returned\r\n"); sd_trace_input = 0; }
 #endif
     if(ConsoleRxBufHead != ConsoleRxBufTail) {                            // if the queue has something in it
         c = ConsoleRxBuf[ConsoleRxBufTail];
@@ -4322,6 +4322,11 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
     adc_init();
     adc_set_temp_sensor_enabled(true);
     mSecTimer=time_us_64()/1000;
+#ifdef PICOCALC_UF2LOADER
+    // rom_chain_image enters with IRQs masked. CRT has installed our vectors;
+    // establish the normal application IRQ state before starting the timer.
+    restore_interrupts(0);
+#endif
     add_repeating_timer_us(-1000, timer_callback, NULL, &timer);
     InitReservedIO();
     ClearExternalIO();
@@ -4369,7 +4374,7 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
 #endif
 #ifdef PICOCALC_UF2LOADER
     sd_display_ready = 1;
-    SDTrace("[SD3] display initialized\r\n");
+    SDTrace("[SD4] display initialized\r\n");
 #endif
     ErrorInPrompt = false;
     exception_set_exclusive_handler(HARDFAULT_EXCEPTION,sigbus);
@@ -4498,11 +4503,11 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
         MMPrintString("I2C Keyboard not found, OPTION KEYBOARD disabled\r\n");
     }
 #ifdef PICOCALC_UF2LOADER
-    SDTrace("[SD3] filesystem boot update: begin\r\n");
+    SDTrace("[SD4] filesystem boot update: begin\r\n");
 #endif
     updatebootcount();
 #ifdef PICOCALC_UF2LOADER
-    SDTrace("[SD3] filesystem boot update: done\r\n");
+    SDTrace("[SD4] filesystem boot update: done\r\n");
 #endif
     *tknbuf = 0;
      ContinuePoint = nextstmt;                               // in case the user wants to use the continue command
@@ -4564,19 +4569,19 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
         }
     #ifdef PICOMITEWEB
 #ifdef PICOCALC_UF2LOADER
-    SDTrace("[SD3] Wi-Fi arch init: begin\r\n");
+    SDTrace("[SD4] Wi-Fi arch init: begin\r\n");
 #endif
     if (cyw43_arch_init()==0) {
 #ifdef PICOCALC_UF2LOADER
-        SDTrace("[SD3] Wi-Fi arch init: done\r\n");
+        SDTrace("[SD4] Wi-Fi arch init: done\r\n");
 #endif
         startupcomplete=1;
 #ifdef PICOCALC_UF2LOADER
-        SDTrace("[SD3] WebConnect: begin\r\n");
+        SDTrace("[SD4] WebConnect: begin\r\n");
 #endif
         WebConnect();
 #ifdef PICOCALC_UF2LOADER
-        SDTrace("[SD3] WebConnect: done\r\n");
+        SDTrace("[SD4] WebConnect: done\r\n");
 #endif
     }
     #endif
@@ -4655,7 +4660,7 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
             restore_interrupts(mask);
             unsigned int before = CursorTimer;
             busy_wait_ms(30);
-            snprintf(tracebuf, sizeof(tracebuf), "[SD3] irqmask=%lu ticks=%lu key=%d bus=%d/%d\r\n",
+            snprintf(tracebuf, sizeof(tracebuf), "[SD4] irqmask=%lu ticks=%lu key=%d bus=%d/%d\r\n",
                      (unsigned long)mask, (unsigned long)(CursorTimer-before),
                      Option.KeyboardConfig, I2C0locked, I2C1locked);
             SDTrace(tracebuf);
