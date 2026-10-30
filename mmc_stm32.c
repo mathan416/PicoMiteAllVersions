@@ -1585,10 +1585,14 @@ void InitReservedIO(void) {
 		if(Option.RTC)RtcGetTime(1);
 #ifndef USBKEYBOARD
 		if(Option.KeyboardConfig==CONFIG_I2C){
+#ifdef PICOCALC
+            InitPicoCalcKeyboard();
+#else
 			CheckI2CKeyboard(1,0);
 			uSec(2000);
 			CheckI2CKeyboard(1,1);
 			uSec(2000);
+#endif
 		}
 #endif	
 	}

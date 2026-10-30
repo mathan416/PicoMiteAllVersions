@@ -94,6 +94,9 @@ extern void I2C_Send_RegData(int i2caddr,int reg,char command);
 #endif
 extern void I2C_Send_Command(char command);
 extern void CheckI2CKeyboard(int noerror, int read);
+#ifdef PICOCALC
+void InitPicoCalcKeyboard(void);
+#endif
 extern void cmd_camera(void);
 extern void cmd_Classic(void);
 extern void cameraclose(void);

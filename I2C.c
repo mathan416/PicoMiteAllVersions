@@ -465,7 +465,7 @@ int DoRtcI2C(int addr, unsigned char * buff) {
 }
 #ifndef USBKEYBOARD
 void CheckI2CKeyboard(int noerror, int read) {
-  uint16_t buff;
+  uint16_t buff = 0;
   //	int readover=0; 
   static int ctrlheld = 0;
   //	while(readover==0){
@@ -476,6 +476,7 @@ void CheckI2CKeyboard(int noerror, int read) {
       I2C_Status = 0;
       I2C_Send_Buffer[0] = 9; // the first register to read
       if (!(DoRtcI2C(0x1F, NULL))) goto i2c_error_exit;
+      return; // Request phase has no key data to decode.
     } else {
       I2C_Rcvbuf_String = (char * ) & buff; // we want a string of bytes
       I2C_Rcvbuf_Float = NULL;
@@ -490,6 +491,9 @@ void CheckI2CKeyboard(int noerror, int read) {
     I2C2_Status = 0;
     I2C_Send_Buffer[0] = 9; // the first register to read
     if (!(DoRtcI2C(0x1F, NULL))) goto i2c_error_exit;
+#ifdef PICOCALC
+    uSec(16000); // Match the STM32 response gap used by UF2 Loader.
+#endif
     I2C2_Rcvbuf_String = (char * ) & buff; // we want a string of bytes
     I2C2_Rcvbuf_Float = NULL;
     I2C2_Rcvbuf_Int = NULL;
@@ -618,6 +622,25 @@ void CheckI2CKeyboard(int noerror, int read) {
   if (Option.KeyboardConfig == CONFIG_I2C) {
     MMPrintString("I2C Keyboard not responding");
     MMPrintString("\r\n");
+  }
+}
+#endif
+
+
+#ifdef PICOCALC
+void InitPicoCalcKeyboard(void) {
+  // The STM32 controller is already active when entered through UF2 Loader.
+  // Use its documented loader transaction gap instead of a 2 ms probe gap.
+  uSec(20000);
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    noI2C = 0;
+    CheckI2CKeyboard(1, 0);
+    if (!noI2C) {
+      uSec(16000);
+      CheckI2CKeyboard(1, 1);
+      if (!noI2C) return;
+    }
+    uSec(20000);
   }
 }
 #endif

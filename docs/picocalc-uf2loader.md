@@ -64,3 +64,21 @@ locations by 8 KiB. This is not an in-place data migration; expect to restore
 files and configure Wi-Fi once. Switching to other firmware can overwrite the
 shared application partition. The SD card's ordinary files remain separate.
 Keep the original USB netfix2 and a private backup for recovery.
+
+## SD2 keyboard follow-up
+
+User hardware test of SD1: loader menu keyboard works, BASIC keyboard does not.
+PicoCalc LoadOptions does force CONFIG_I2C and physical pins 9/10 (GP6/GP7),
+which select I2C1. That bus's CheckI2CKeyboard path requests register 9 then
+reads immediately; loader v2.4.1 explicitly waits 16 ms between the operations.
+SD2 matches that I2C1 response gap and retries the startup probe three times
+with a settling delay. This is a timing hypothesis supported by source, not
+yet a confirmed hardware fix. No controller reset command is sent.
+
+Also fix a separate definite bug on the I2C0 split path: initialize buff and
+return from the request-only phase before decoding uninitialized data.
+
+check_keyboard_init.py tests real startup code with a timing-sensitive mock,
+transient write/read failures and bounded permanent failure, and compiles the
+actual I2C1 transaction statements to enforce the 16 ms response gap. Tests
+pass with ASan/UBSan. The saved-option layout and loader reservation are unchanged.
