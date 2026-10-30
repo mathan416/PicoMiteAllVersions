@@ -304,3 +304,10 @@ if(PICOCALC_UF2LOADER)
     target_compile_definitions(PicoMite PRIVATE PICOCALC_UF2LOADER=1 PICO_FLASH_ASSUME_CORE1_SAFE=1)
     set_source_files_properties(FileIO.c LoaderFlash.c PROPERTIES COMPILE_OPTIONS "-Os")
 endif()
+
+if(PICOCALC_UF2LOADER)
+    # SDK 2.1.1 uses PICO_STACK_SIZE, not PICO_CORE0_STACK_SIZE.
+    target_compile_definitions(PicoMite PRIVATE PICO_STACK_SIZE=0x4000)
+    pico_set_linker_script(PicoMite ${CMAKE_CURRENT_LIST_DIR}/webmite_sd_memmap.ld)
+    target_sources(PicoMite PRIVATE FaultCapture.c)
+endif()

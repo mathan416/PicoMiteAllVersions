@@ -4355,7 +4355,11 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
 #endif
 #endif
     ErrorInPrompt = false;
+#ifdef PICOCALC_UF2LOADER
+    exception_set_exclusive_handler(HARDFAULT_EXCEPTION,loader_hardfault_capture);
+#else
     exception_set_exclusive_handler(HARDFAULT_EXCEPTION,sigbus);
+#endif
     exception_set_exclusive_handler(SVCALL_EXCEPTION,sigbus);
     exception_set_exclusive_handler(PENDSV_EXCEPTION,sigbus);
     exception_set_exclusive_handler(NMI_EXCEPTION ,sigbus);
@@ -4444,6 +4448,9 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
             }
         }
     }
+#ifdef PICOCALC_UF2LOADER
+    loader_report_previous_fault();
+#endif
     memset(inpbuf,0,STRINGSIZE);
     WatchdogSet = false;
     if(_excep_code == INVALID_CLOCKSPEED) {
