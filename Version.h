@@ -29,7 +29,11 @@ list all
 
 
 
-#define VERSION         "6.00.03-netfix2"			    // define the version number
+#ifdef PICOCALC_UF2LOADER
+#define VERSION         "6.00.03-netfix2-sd9"
+#else
+#define VERSION         "6.00.03-netfix2"
+#endif			    // define the version number
 #define YEAR			"2011-2025"			    // and the year
 #define YEAR2          "2016-2025"
 #ifdef rp2350

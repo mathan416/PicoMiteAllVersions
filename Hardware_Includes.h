@@ -398,3 +398,11 @@ extern struct tagMTRand *g_myrand;
 #include "Audio.h"
 #include "PS2Keyboard.h"
 /*  @endcond */
+
+#ifdef PICOCALC_UF2LOADER
+#include "LoaderFlash.h"
+#endif
+
+#ifdef PICOCALC_UF2LOADER
+#include "FaultCapture.h"
+#endif

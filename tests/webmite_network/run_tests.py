@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,3 +59,6 @@ with tempfile.TemporaryDirectory(prefix='webmite-network-') as directory:
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                     str(source), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
+
+# Keep the CI host entry point covering the full TFTP protocol/file error suite.
+subprocess.run([sys.executable, str(Path(__file__).with_name("check_tftp_errors.py"))], check=True)

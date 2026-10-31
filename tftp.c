@@ -55,6 +55,7 @@
 
 #include "lwip/udp.h"
 #include "lwip/timeouts.h"
+#include "lwip/sys.h"
 #include "lwip/debug.h"
 
 #define TFTP_MAX_PAYLOAD_SIZE 512
@@ -85,15 +86,28 @@ struct tftp_state {
   struct udp_pcb *upcb;
   ip_addr_t addr;
   u16_t port;
-  int timer;
-  int last_pkt;
+  u32_t timer;
+  u32_t last_pkt;
   u16_t blknum;
   u8_t retries;
   u8_t mode_write;
   u8_t tftp_mode;
+  char request_name[TFTP_MAX_FILENAME_LEN + 1];
 };
 
 static struct tftp_state tftp_state;
+
+/* Remember the final received DATA after closing its file. If the ACK is
+ * lost, RFC 1350 permits the sender to retransmit: acknowledge it again
+ * without reopening, rewriting, or reserving the active-transfer slot. */
+static struct {
+  ip_addr_t addr;
+  u16_t port, block, length;
+  u32_t time;
+  u8_t valid;
+} tftp_completed_write;
+static int tftp_repeat_final_ack(const ip_addr_t *addr, u16_t port,
+                                 const struct pbuf *p, u16_t block);
 
 static void tftp_tmr(void *arg);
 
@@ -111,8 +125,9 @@ close_handle(void)
   sys_untimeout(tftp_tmr, NULL);
 
   if (tftp_state.handle) {
-    tftp_state.ctx->close(tftp_state.handle);
+    void *handle = tftp_state.handle;
     tftp_state.handle = NULL;
+    tftp_state.ctx->close(handle);
     LWIP_DEBUGF(TFTP_DEBUG | LWIP_DBG_STATE, ("tftp: closing\n"));
   }
 }
@@ -191,6 +206,20 @@ send_ack(const ip_addr_t *addr, u16_t port, u16_t blknum)
   return ret;
 }
 
+static int
+tftp_repeat_final_ack(const ip_addr_t *addr, u16_t port,
+                      const struct pbuf *p, u16_t block)
+{
+  if (!tftp_completed_write.valid || port != tftp_completed_write.port ||
+      !ip_addr_eq(addr, &tftp_completed_write.addr) ||
+      block != tftp_completed_write.block ||
+      p->tot_len != tftp_completed_write.length + TFTP_HEADER_LENGTH ||
+      (u32_t)(sys_now() - tftp_completed_write.time) >= 2u*TFTP_TIMEOUT_MSECS)
+    return 0;
+  send_ack(addr, port, block);
+  return 1;
+}
+
 static err_t
 resend_data(const ip_addr_t *addr, u16_t port)
 {
@@ -223,14 +252,15 @@ send_data(const ip_addr_t *addr, u16_t port)
 
   tftp_state.last_data = init_packet(TFTP_DATA, tftp_state.blknum, TFTP_MAX_PAYLOAD_SIZE);
   if (tftp_state.last_data == NULL) {
+    close_handle();
     return;
   }
 
   payload = (u16_t *) tftp_state.last_data->payload;
 
   ret = tftp_state.ctx->read(tftp_state.handle, &payload[2], TFTP_MAX_PAYLOAD_SIZE);
-  if (ret < 0) {
-    send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Error occurred while reading the file.");
+  if (ret < 0 || ret > TFTP_MAX_PAYLOAD_SIZE) {
+    send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Read failed");
     close_handle();
     return;
   }
@@ -239,176 +269,135 @@ send_data(const ip_addr_t *addr, u16_t port)
   resend_data(addr, port);
 }
 
+/* A stack-only view strips a possibly split header without modifying or
+ * freeing any receive nodes. The original chain is always released once. */
+static int tftp_payload_view(const struct pbuf *p, struct pbuf *view) {
+  u16_t skip = TFTP_HEADER_LENGTH;
+  u16_t remaining = p->tot_len - skip;
+  const struct pbuf *q = p;
+  while (q && skip >= q->len) { skip -= q->len; q = q->next; }
+  memset(view, 0, sizeof *view);
+  if (!q) return !skip && !remaining;
+  *view = *q;
+  view->payload = (u8_t *)q->payload + skip;
+  view->len = q->len - skip;
+  view->tot_len = remaining;
+  return 1;
+}
+
 static void
 tftp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
-  u16_t *sbuf = (u16_t *) p->payload;
-  int opcode;
-
-  LWIP_UNUSED_ARG(arg);
-  LWIP_UNUSED_ARG(upcb);
-
-  if (((tftp_state.port != 0) && (port != tftp_state.port)) ||
+  u16_t header[2];
+  LWIP_UNUSED_ARG(arg); LWIP_UNUSED_ARG(upcb);
+  if (p->tot_len < sizeof header || pbuf_copy_partial(p, header, sizeof header, 0) != sizeof header) {
+    pbuf_free(p); return;
+  }
+  u16_t opcode = lwip_ntohs(header[0]), block = lwip_ntohs(header[1]);
+  if ((opcode == TFTP_DATA && p->tot_len > TFTP_MAX_PAYLOAD_SIZE + TFTP_HEADER_LENGTH) ||
+      (opcode == TFTP_ACK && p->tot_len != TFTP_HEADER_LENGTH)) {
+    send_error(addr, port, TFTP_ERROR_ILLEGAL_OPERATION, "Invalid packet");
+    pbuf_free(p); return;
+  }
+  if (opcode == TFTP_DATA && tftp_repeat_final_ack(addr, port, p, block)) {
+    pbuf_free(p); return;
+  }
+  if ((tftp_state.port && port != tftp_state.port) ||
       (!ip_addr_isany_val(tftp_state.addr) && !ip_addr_eq(&tftp_state.addr, addr))) {
     send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Only one connection at a time is supported");
-    pbuf_free(p);
-    return;
+    pbuf_free(p); return;
   }
-  opcode = sbuf[0];
-
-  tftp_state.last_pkt = tftp_state.timer;
-  tftp_state.retries = 0;
-
   switch (opcode) {
-    case PP_HTONS(TFTP_RRQ): /* fall through */
-    case PP_HTONS(TFTP_WRQ): {
-      const char tftp_null = 0;
-      char filename[TFTP_MAX_FILENAME_LEN + 1];
-      char mode[TFTP_MAX_MODE_LEN + 1];
-      u16_t filename_end_offset;
-      u16_t mode_end_offset;
-
-      if (tftp_state.handle != NULL) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Only one connection at a time is supported");
+    case TFTP_RRQ: case TFTP_WRQ: {
+      char filename[TFTP_MAX_FILENAME_LEN + 1], mode[TFTP_MAX_MODE_LEN + 1];
+      const char zero = 0;
+      u16_t name_end = pbuf_memfind(p, &zero, 1, 2);
+      if (name_end == 0xffff || name_end < 3 || name_end - 2 > TFTP_MAX_FILENAME_LEN ||
+          pbuf_copy_partial(p, filename, name_end - 1, 2) != name_end - 1) {
+        send_error(addr, port, TFTP_ERROR_ILLEGAL_OPERATION, "Invalid filename"); break;
+      }
+      u16_t mode_end = pbuf_memfind(p, &zero, 1, name_end + 1);
+      if (mode_end == 0xffff || mode_end <= name_end + 1 ||
+          mode_end - name_end - 1 > TFTP_MAX_MODE_LEN || mode_end + 1 != p->tot_len ||
+          pbuf_copy_partial(p, mode, mode_end - name_end, name_end + 1) != mode_end - name_end ||
+          lwip_stricmp(mode, "octet")) {
+        send_error(addr, port, TFTP_ERROR_ILLEGAL_OPERATION, "Octet mode required"); break;
+      }
+      if (tftp_state.handle) {
+        if (tftp_state.blknum == 1 && !strcmp(filename, tftp_state.request_name) &&
+            ((opcode == TFTP_WRQ) == (tftp_state.mode_write != 0))) {
+          tftp_state.last_pkt = tftp_state.timer; tftp_state.retries = 0;
+          if (tftp_state.mode_write) send_ack(addr, port, 0);
+          else if (tftp_state.last_data) resend_data(addr, port);
+        } else send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Transfer busy");
         break;
       }
-
-      if ((tftp_state.tftp_mode & LWIP_TFTP_MODE_SERVER) == 0) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "TFTP server not enabled");
-        break;
+      if (!(tftp_state.tftp_mode & LWIP_TFTP_MODE_SERVER)) {
+        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Server disabled"); break;
       }
-
-      sys_timeout(TFTP_TIMER_MSECS, tftp_tmr, NULL);
-
-      /* find \0 in pbuf -> end of filename string */
-      filename_end_offset = pbuf_memfind(p, &tftp_null, sizeof(tftp_null), 2);
-      if ((u16_t)(filename_end_offset - 1) > sizeof(filename)) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Filename too long/not NULL terminated");
-        break;
-      }
-      pbuf_copy_partial(p, filename, filename_end_offset - 1, 2);
-
-      /* find \0 in pbuf -> end of mode string */
-      mode_end_offset = pbuf_memfind(p, &tftp_null, sizeof(tftp_null), filename_end_offset + 1);
-      if ((u16_t)(mode_end_offset - filename_end_offset) > sizeof(mode)) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Mode too long/not NULL terminated");
-        break;
-      }
-      pbuf_copy_partial(p, mode, mode_end_offset - filename_end_offset, filename_end_offset + 1);
-
-      tftp_state.handle = tftp_state.ctx->open(filename, mode, opcode == PP_HTONS(TFTP_WRQ));
-      tftp_state.blknum = 1;
-
+      tftp_state.handle = tftp_state.ctx->open(filename, mode, opcode == TFTP_WRQ);
       if (!tftp_state.handle) {
-        send_error(addr, port, TFTP_ERROR_FILE_NOT_FOUND, "Unable to open requested file.");
-        break;
+        send_error(addr, port, TFTP_ERROR_FILE_NOT_FOUND, "Unable to open file"); break;
       }
-
-      LWIP_DEBUGF(TFTP_DEBUG | LWIP_DBG_STATE, ("tftp: %s request from ", (opcode == PP_HTONS(TFTP_WRQ)) ? "write" : "read"));
-      ip_addr_debug_print(TFTP_DEBUG | LWIP_DBG_STATE, addr);
-      LWIP_DEBUGF(TFTP_DEBUG | LWIP_DBG_STATE, (" for '%s' mode '%s'\n", filename, mode));
-
-      ip_addr_copy(tftp_state.addr, *addr);
-      tftp_state.port = port;
-
-      if (opcode == PP_HTONS(TFTP_WRQ)) {
-        tftp_state.mode_write = 1;
-        send_ack(addr, port, 0);
-      } else {
-        tftp_state.mode_write = 0;
-        send_data(addr, port);
-      }
-
+      if (tftp_completed_write.valid && port == tftp_completed_write.port &&
+          ip_addr_eq(addr, &tftp_completed_write.addr)) tftp_completed_write.valid = 0;
+      strcpy(tftp_state.request_name, filename);
+      tftp_state.blknum = 1; tftp_state.mode_write = opcode == TFTP_WRQ;
+      ip_addr_copy(tftp_state.addr, *addr); tftp_state.port = port;
+      tftp_state.last_pkt = tftp_state.timer; tftp_state.retries = 0;
+      sys_untimeout(tftp_tmr, NULL);
+      sys_timeout(TFTP_TIMER_MSECS, tftp_tmr, NULL);
+      if (tftp_state.mode_write) send_ack(addr, port, 0);
+      else send_data(addr, port);
       break;
     }
-
-    case PP_HTONS(TFTP_DATA): {
-      int ret;
-      u16_t blknum;
-
-      if (tftp_state.handle == NULL) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "No connection");
-        break;
+    case TFTP_DATA: {
+      if (!tftp_state.handle || !tftp_state.mode_write) {
+        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "No write connection"); break;
       }
-
-      if (tftp_state.mode_write != 1) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Not a write connection");
-        break;
-      }
-
-      blknum = lwip_ntohs(sbuf[1]);
-      if (blknum == tftp_state.blknum) {
-        pbuf_remove_header(p, TFTP_HEADER_LENGTH);
-
-        ret = tftp_state.ctx->write(tftp_state.handle, p);
-        if (ret < 0) {
-          send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "error writing file");
-          close_handle();
-        } else {
-          send_ack(addr, port, blknum);
+      if (block == tftp_state.blknum) {
+        struct pbuf view;
+        if (!tftp_payload_view(p, &view) || tftp_state.ctx->write(tftp_state.handle, &view) != (int)view.tot_len) {
+          send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Write failed"); close_handle(); break;
         }
-
-        if (p->tot_len < TFTP_MAX_PAYLOAD_SIZE) {
+        tftp_state.last_pkt = tftp_state.timer; tftp_state.retries = 0;
+        if (view.tot_len < TFTP_MAX_PAYLOAD_SIZE) {
+          ip_addr_copy(tftp_completed_write.addr, *addr);
+          tftp_completed_write.port = port; tftp_completed_write.block = block;
+          tftp_completed_write.length = view.tot_len; tftp_completed_write.time = sys_now();
+          tftp_completed_write.valid = 1;
           close_handle();
-        } else {
-          tftp_state.blknum++;
-        }
-      } else if ((u16_t)(blknum + 1) == tftp_state.blknum) {
-        /* retransmit of previous block, ack again (casting to u16_t to care for overflow) */
-        send_ack(addr, port, blknum);
-      } else {
-        send_error(addr, port, TFTP_ERROR_UNKNOWN_TRFR_ID, "Wrong block number");
-      }
+        } else ++tftp_state.blknum;
+        send_ack(addr, port, block);
+      } else if ((u16_t)(block + 1) == tftp_state.blknum) send_ack(addr, port, block);
+      else send_error(addr, port, TFTP_ERROR_UNKNOWN_TRFR_ID, "Wrong block");
       break;
     }
-
-    case PP_HTONS(TFTP_ACK): {
-      u16_t blknum;
-      int lastpkt;
-
-      if (tftp_state.handle == NULL) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "No connection");
-        break;
+    case TFTP_ACK:
+      if (!tftp_state.handle || tftp_state.mode_write) {
+        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "No read connection"); break;
       }
-
-      if (tftp_state.mode_write != 0) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Not a read connection");
-        break;
+      /* Ignore duplicate ACKs: retransmission belongs to the timeout, not
+       * the peer's duplicate ACK (avoid the Sorcerer's Apprentice loop). */
+      if ((u16_t)(block + 1) == tftp_state.blknum) break;
+      if (block != tftp_state.blknum) {
+        send_error(addr, port, TFTP_ERROR_UNKNOWN_TRFR_ID, "Wrong block"); break;
       }
-
-      blknum = lwip_ntohs(sbuf[1]);
-      if (blknum != tftp_state.blknum) {
-        send_error(addr, port, TFTP_ERROR_UNKNOWN_TRFR_ID, "Wrong block number");
-        break;
-      }
-
-      lastpkt = 0;
-
-      if (tftp_state.last_data != NULL) {
-        lastpkt = tftp_state.last_data->tot_len != (TFTP_MAX_PAYLOAD_SIZE + TFTP_HEADER_LENGTH);
-      }
-
-      if (!lastpkt) {
-        tftp_state.blknum++;
-        send_data(addr, port);
-      } else {
+      tftp_state.last_pkt = tftp_state.timer; tftp_state.retries = 0;
+      if (tftp_state.last_data && tftp_state.last_data->tot_len < TFTP_MAX_PAYLOAD_SIZE + TFTP_HEADER_LENGTH)
         close_handle();
-      }
-
+      else { ++tftp_state.blknum; send_data(addr, port); }
       break;
-    }
-    case PP_HTONS(TFTP_ERROR):
-      if (tftp_state.handle != NULL) {
-        pbuf_remove_header(p, TFTP_HEADER_LENGTH);
-        tftp_state.ctx->error(tftp_state.handle, sbuf[1], (const char*)p->payload, p->len);
+    case TFTP_ERROR: {
+      struct pbuf view;
+      if (tftp_state.handle && tftp_payload_view(p, &view)) {
+        tftp_state.ctx->error(tftp_state.handle, block, view.payload, view.len);
         close_handle();
       }
       break;
-    default:
-      send_error(addr, port, TFTP_ERROR_ILLEGAL_OPERATION, "Unknown operation");
-      break;
+    }
+    default: send_error(addr, port, TFTP_ERROR_ILLEGAL_OPERATION, "Unknown operation"); break;
   }
-
   pbuf_free(p);
 }
 
@@ -447,6 +436,8 @@ tftp_init_common(u8_t mode, const struct tftp_context *ctx)
 {
   err_t ret;
 
+  /* Reinitializing a bound server would leak its old PCB and file state. */
+  if (tftp_state.upcb) return ERR_USE;
   /* LWIP_ASSERT_CORE_LOCKED(); is checked by udp_new() */
   struct udp_pcb *pcb = udp_new_ip_type(IPADDR_TYPE_ANY);
   if (pcb == NULL) {
@@ -459,6 +450,7 @@ tftp_init_common(u8_t mode, const struct tftp_context *ctx)
     return ret;
   }
 
+  tftp_completed_write.valid = 0;
   tftp_state.handle    = NULL;
   tftp_state.port      = 0;
   tftp_state.ctx       = ctx;
