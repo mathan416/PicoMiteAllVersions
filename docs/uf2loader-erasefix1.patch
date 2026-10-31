@@ -1,0 +1,142 @@
+From 5b884d372725429fb30b2080f45c021fa64e1315 Mon Sep 17 00:00:00 2001
+From: Iain Bennett <iain@mathan.ca>
+Date: Fri, 30 Oct 2026 20:56:53 -0400
+Subject: [PATCH] Backport RP2350 erase rounding fix to preserve following
+ settings sector
+
+---
+ CMakeLists.txt                |  2 +-
+ ERASE-FIX.md                  | 28 ++++++++++++++++++
+ tests/check_erase_rounding.py | 53 +++++++++++++++++++++++++++++++++++
+ ui/uf2.c                      |  7 +++--
+ 4 files changed, 87 insertions(+), 3 deletions(-)
+ create mode 100644 ERASE-FIX.md
+ create mode 100644 tests/check_erase_rounding.py
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3a271fd..d47d46a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -12,7 +12,7 @@ set(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL "-specs=nano.specs")
+ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/../output)
+ 
+ set(PROJECT_VERSION "2.4.1")
+-set(VERSION_STRING "${PROJECT_VERSION}")
++set(VERSION_STRING "${PROJECT_VERSION}-erasefix1")
+ 
+ # Initialise pico_sdk from installed location
+ # (note this can come from environment, CMake cache etc)
+diff --git a/ERASE-FIX.md b/ERASE-FIX.md
+new file mode 100644
+index 0000000..b19294a
+--- /dev/null
++++ b/ERASE-FIX.md
+@@ -0,0 +1,28 @@
++# RP2350 saved-settings erase fix
++
++Based on UF2 Loader v2.4.1, commit 1a0b1c4b144a72445e44e4c545ec4163bc873685.
++The original `(size + 0x1fff) & -4096` erases one sector too many. With
++PicoCalc WebMite SD8, a 0x10da00-byte image erased through 0x10f000, including
++saved options at 0x10e000. Correct rounding ends at 0x10e000, exclusively.
++
++The maintainer already corrected the rounding formula in:
++https://github.com/pelrun/uf2loader/commit/543fba49bedfce861ecb8a37683b5e76fe866848
++This is a minimal backport to the existing 2.4.1 menu, with additional rejection
++of empty/overflowing lengths and a sanitizer regression test.
++
++Run `python3 tests/check_erase_rounding.py`. It exercises the actual RP2350
++erase function with mock ROM/flash, checks the WebMite options boundary and
++sector-edge cases, and verifies errors propagate. The same test rejects the
++unpatched v2.4.1 function at its erase-length assertion.
++
++Build the `ui` target for `PICO_BOARD=pico2`. Replace only the SD root's
++BOOT2350.UF2 with the resulting RAM menu, version 2.4.1-erasefix1. Do not put
++it in pico2-apps and do not flash/reinstall bootloader_pico2.uf2. Stage3 and
++partition tables are unchanged.
++
++This prevents this loader from erasing the sector after a flashed image.
++It cannot restore settings already erased, nor preserve data inside sectors
++actually occupied by a different/larger image. Re-enter Wi-Fi once if needed,
++then select the same compatible WebMite image using the patched menu to
++verify persistence on hardware. Host regression/build tests pass; hardware
++validation is pending.
+diff --git a/tests/check_erase_rounding.py b/tests/check_erase_rounding.py
+new file mode 100644
+index 0000000..ce5b7aa
+--- /dev/null
++++ b/tests/check_erase_rounding.py
+@@ -0,0 +1,53 @@
++#!/usr/bin/env python3
++"""Exercise the actual RP2350 loader erase function with mock flash/ROM."""
++from pathlib import Path
++import subprocess,sys,tempfile
++root=Path(__file__).resolve().parents[1]
++s=Path(sys.argv[1]).read_text() if len(sys.argv)>1 else (root/'ui/uf2.c').read_text()
++a=s.index('static inline int FLASH_ERASE',s.index('#elif PICO_RP2350'));i=s.index('{',a)+1;depth=1
++while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
++function=s[a:i]
++code=r'''
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#include <assert.h>
++#include <stdio.h>
++#define FLASH_SECTOR_SIZE 4096u
++#define XIP_BASE 0x10000000u
++#define BOOTROM_ERROR_INVALID_ARG (-5)
++#define CFLASH_OP_VALUE_ERASE 0
++#define CFLASH_OP_LSB 0
++#define CFLASH_SECLEVEL_VALUE_SECURE 1
++#define CFLASH_SECLEVEL_LSB 8
++#define CFLASH_ASPACE_VALUE_RUNTIME 1
++#define CFLASH_ASPACE_LSB 16
++typedef struct {uint32_t flags;} cflash_flags_t;
++static uint8_t flash[4u*1024u*1024u];
++static uint32_t last_size,calls;static int failure;
++static int rom_flash_op(cflash_flags_t f,uintptr_t addr,uint32_t n,void*p){
++ assert(f.flags==((1u<<8)|(1u<<16)) && !p && addr==XIP_BASE && !(n%4096));
++ calls++;last_size=n;if(failure)return failure;assert(n<=sizeof flash);memset(flash,255,n);return 0;
++}
++'''+function+r'''
++int main(void){
++ // Actual SD8 payload ends at 0x10da00; saved options start at 0x10e000.
++ memset(flash,0x5a,sizeof flash);assert(!FLASH_ERASE(XIP_BASE,0x10da00));
++ assert(last_size==0x10e000);
++ for(unsigned i=0;i<0x10e000;i++)assert(flash[i]==255);
++ for(unsigned i=0x10e000;i<0x10f000;i++)assert(flash[i]==0x5a);
++ uint32_t sizes[]={1,255,256,4095,4096,4097,8192,0x10d100,0x10da00,0x10e000};
++ for(unsigned i=0;i<sizeof sizes/sizeof sizes[0];i++){
++  assert(!FLASH_ERASE(XIP_BASE,sizes[i]));assert(last_size==((sizes[i]+4095u)/4096u)*4096u);
++ }
++ unsigned before=calls;assert(FLASH_ERASE(XIP_BASE,0)==BOOTROM_ERROR_INVALID_ARG);
++ assert(FLASH_ERASE(XIP_BASE,UINT32_MAX)==BOOTROM_ERROR_INVALID_ARG);
++ assert(FLASH_ERASE(XIP_BASE,UINT32_MAX-4094u)==BOOTROM_ERROR_INVALID_ARG);assert(calls==before);
++ failure=-7;assert(FLASH_ERASE(XIP_BASE,4096)==-7);
++ puts("PASS: SD8 erase stops before saved options; sector boundaries, empty/overflow rejection and ROM errors verified");
++}
++'''
++with tempfile.TemporaryDirectory() as folder:
++ d=Path(folder);(d/'test.c').write_text(code)
++ subprocess.run(['cc','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(d/'test.c'),'-o',str(d/'test')],check=True)
++ subprocess.run([str(d/'test')],check=True)
+diff --git a/ui/uf2.c b/ui/uf2.c
+index 8f989e2..4eaa9f8 100644
+--- a/ui/uf2.c
++++ b/ui/uf2.c
+@@ -98,8 +98,11 @@ static inline int FLASH_ERASE(uintptr_t address, uint32_t size_bytes)
+                                  (CFLASH_SECLEVEL_VALUE_SECURE << CFLASH_SECLEVEL_LSB) |
+                                  (CFLASH_ASPACE_VALUE_RUNTIME << CFLASH_ASPACE_LSB)};
+ 
+-  // Round up size_bytes or rom_flash_op will throw an alignment error
+-  uint32_t size_aligned = (size_bytes + 0x1FFF) & -FLASH_SECTOR_SIZE;
++  // Round up to the containing sector, not one sector beyond it. Erasing
++  // the extra sector can destroy settings stored immediately after an app.
++  if (!size_bytes || size_bytes > UINT32_MAX - (FLASH_SECTOR_SIZE - 1u))
++    return BOOTROM_ERROR_INVALID_ARG;
++  uint32_t size_aligned = (size_bytes + FLASH_SECTOR_SIZE - 1u) & ~(FLASH_SECTOR_SIZE - 1u);
+ 
+   return rom_flash_op(cflash_flags, address, size_aligned, NULL);
+ }
+-- 
+2.54.0 (Apple Git-157)
+
