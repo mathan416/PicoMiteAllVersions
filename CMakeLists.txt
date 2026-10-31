@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.13)
 # Valid builds are PICO, PICOUSB, VGA, VGAUSB, HDMI(rp2350 only), HDMIUSB(rp2350 only), WEB
 
 set(PICOCALC true)
+option(PICOCALC_UF2LOADER "Partition-aware flash for PicoCalc UF2 Loader" OFF)
 # For dynamic loading from SD card:
 # SDBOOT requires the bootloader to be in the first 256KB of flash
 # PicoMite will need to be shifted by this amount, and all references to
@@ -172,7 +173,7 @@ target_compile_options(PicoMite PRIVATE -DNDEBUG
 										-DPICO_XOSC_STARTUP_DELAY_MULTIPLIER=64 
 										-DPICO_CLOCK_AJDUST_PERI_CLOCK_WITH_SYS_CLOCK
 										-DPICO_XOSC_STARTUP_DELAY_MULTIPLIER=64 
-										-DPICO_FLASH_SIZE_BYTES=16777216
+										 $<$<NOT:$<BOOL:${PICOCALC_UF2LOADER}>>:-DPICO_FLASH_SIZE_BYTES=16777216>
 										-DPICO_CORE1_STACK_SIZE=0x00
 										-DPICO_MALLOC_PANIC
 										-O2
@@ -285,7 +286,7 @@ endif()
 # The original linker otherwise permits code to grow into that reserved flash.
 if(COMPILE STREQUAL "WEB" OR COMPILE STREQUAL "WEBRP2350")
     # These networking callbacks are not timing-critical; retain the flash layout.
-    set_source_files_properties(MMtelnet.c MMtcpserver.c MMTCPclient.c
+    set_source_files_properties(FileIO.c MMtelnet.c MMtcpserver.c MMTCPclient.c
         MMntp.c MMudp.c MMtftp.c tftp.c
         PROPERTIES COMPILE_OPTIONS -Os)
     target_link_options(PicoMite PRIVATE
@@ -293,14 +294,20 @@ if(COMPILE STREQUAL "WEB" OR COMPILE STREQUAL "WEBRP2350")
 endif()
 
 # Separate candidate: preserve the USB-only netfix2 configuration by default.
-option(PICOCALC_UF2LOADER "Partition-aware flash for PicoCalc UF2 Loader" OFF)
 if(PICOCALC_UF2LOADER)
     if(NOT COMPILE STREQUAL "WEBRP2350")
         message(FATAL_ERROR "SD compatibility is currently scoped to WEBRP2350")
     endif()
-    target_sources(PicoMite PRIVATE LoaderFlash.c)
+    target_sources(PicoMite PRIVATE LoaderFlash.c LoaderFilesystem.c)
     # This WebMite build does not launch core1. SDK flash_safe_execute must
     # treat the unused core as safe rather than waiting for a lockout victim.
     target_compile_definitions(PicoMite PRIVATE PICOCALC_UF2LOADER=1 PICO_FLASH_ASSUME_CORE1_SAFE=1)
     set_source_files_properties(FileIO.c LoaderFlash.c PROPERTIES COMPILE_OPTIONS "-Os")
+endif()
+
+if(PICOCALC_UF2LOADER)
+    # SDK 2.1.1 uses PICO_STACK_SIZE, not PICO_CORE0_STACK_SIZE.
+    target_compile_definitions(PicoMite PRIVATE PICO_STACK_SIZE=0x4000)
+    pico_set_linker_script(PicoMite ${CMAKE_CURRENT_LIST_DIR}/webmite_sd_memmap.ld)
+    target_sources(PicoMite PRIVATE FaultCapture.c)
 endif()

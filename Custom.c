@@ -1888,9 +1888,15 @@ void cmd_web(void){
             	setwifi(tp);
                 WebConnect();
             } else {
-	            if(cyw43_wifi_link_status(&cyw43_state,CYW43_ITF_STA)<0){
-	                WebConnect();
-	            }
+                if (!*Option.SSID) {
+                    MMPrintString("WiFi is not configured. Use OPTION WIFI.\r\n");
+                } else if (WIFIconnected &&
+                           cyw43_tcpip_link_status(&cyw43_state,CYW43_ITF_STA)==CYW43_LINK_UP) {
+                    MMPrintString("Already connected: ");
+                    MMPrintString(ip4addr_ntoa(netif_ip4_addr(cyw43_state.netif))); PRet();
+                } else {
+                    WebConnect();
+                }
 	        }
            return;   
         }

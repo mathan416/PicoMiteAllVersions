@@ -1685,9 +1685,18 @@ void __not_in_flash_func(ProcessWeb)(int mode){
     static int lastonoff=0;
     static uint64_t lastheartmsec=0;
     uint64_t timenow=time_us_64();   
+    // Poll architecture must keep servicing driver/lwIP work even while
+    // association failed or no TCP server has been opened yet.
+    if(testcount == 0 || timenow>lastusec){
+        lastusec=timenow+1000;
+        testcount = 0 ;
+        if(startupcomplete)cyw43_arch_poll();
+    }
+    testcount++;
+    if(testcount==100)testcount=0;
     if(!WIFIconnected && startupcomplete)goto flashonly;
     TCP_SERVER_T *state = (TCP_SERVER_T*)TCPstate;
-    if(!state)return;
+    if(!state)goto flashonly;
     int t=0;
     for(int i=0;i<MaxPcb;i++){
         if(state->client_pcb[i]==NULL){
@@ -1710,13 +1719,6 @@ void __not_in_flash_func(ProcessWeb)(int mode){
             }
         }
     }
-    if(testcount == 0 || timenow>lastusec){
-        lastusec=timenow+1000;
-        testcount = 0 ;
-        if(startupcomplete)cyw43_arch_poll();
-    }
-    testcount++;
-    if(testcount==100)testcount=0;
     if(!mode)return;
     if(state->telnet_pcb_no!=99){
         if(timenow > flushtimer){
@@ -3929,12 +3931,26 @@ void MIPS16 updatebootcount(void){
     pico_lfs_cfg.block_count = (Option.FlashSize-RoundUpK4(TOP_OF_SYSTEM_FLASH)-(Option.modbuff ? 1024*Option.modbuffsize : 0))/4096;
     int err,boot_count=0;
  	    err= lfs_mount(&lfs, &pico_lfs_cfg);
-    // reformat if we can't mount the filesystem
-    // this should only happen on the first boot
+#ifdef PICOCALC_UF2LOADER
+    /* Never erase an existing filesystem merely because mounting failed. */
+    extern int loader_filesystem_recover(lfs_t *, struct lfs_config *, int);
+    err = loader_filesystem_recover(&lfs, &pico_lfs_cfg, err);
+    if (err == 1) {
+        MMPrintString("A: legacy size; read-only recovery. Use B: for files.\r\n");
+        return;
+    }
+    if (err < 0) {
+        MMPrintString("A: unavailable; preserved. Use B: for files.\r\n");
+        return;
+    }
+#else
+    // Historical behavior for other firmware builds.
     if (err) {
         err=lfs_format(&lfs, &pico_lfs_cfg);
-        err=lfs_mount(&lfs, &pico_lfs_cfg);
+        if (!err) err=lfs_mount(&lfs, &pico_lfs_cfg);
     }
+    if (err) return;
+#endif
 
     err=lfs_file_open(&lfs, &lfs_file, "bootcount", LFS_O_RDWR | LFS_O_CREAT);;
     int dt=get_fattime();
@@ -4041,6 +4057,7 @@ static void MIPS16 transform_star_command(char *input) {
 }
 #ifdef PICOMITEWEB
 void WebConnect(void){
+    static bool services_started = false;
     if(*Option.SSID){
         if(*Option.ipaddress){
             cyw43_arch_enable_sta_mode();
@@ -4057,17 +4074,25 @@ void WebConnect(void){
         }
         cyw43_wifi_pm(&cyw43_state, CYW43_NO_POWERSAVE_MODE);        
         MMPrintString(" connecting to WiFi...\r\n");
-        if (cyw43_arch_wifi_connect_timeout_ms((char *)Option.SSID, (char *)(*Option.PASSWORD ? Option.PASSWORD : NULL), (*Option.PASSWORD ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN), 30000)) {
-            MMPrintString("failed to connect.\r\n");
+        int wifi_result = cyw43_arch_wifi_connect_timeout_ms((char *)Option.SSID, (char *)(*Option.PASSWORD ? Option.PASSWORD : NULL), (*Option.PASSWORD ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN), 30000);
+        if (wifi_result) {
+            MMPrintString("failed to connect: code "); PInt(wifi_result);
+            MMPrintString(", link "); PInt(cyw43_wifi_link_status(&cyw43_state, CYW43_ITF_STA)); PRet();
+            MMPrintString("Use WEB CONNECT to retry saved WiFi.\r\n");
             WIFIconnected=0;
         } else {
             char buff[STRINGSIZE]={0};
             sprintf(buff,"Connected %s\r\n",ip4addr_ntoa(netif_ip4_addr(netif_list)));
             MMPrintString(buff);
             WIFIconnected=1;
-            open_tcp_server();
-            if(!Option.disabletftp)cmd_tftp_server_init();
-            if(Option.UDP_PORT)open_udp_server();
+            // Association retries reuse listeners bound to this netif. Opening
+            // them again loses clients and attempts to bind occupied ports.
+            if (!services_started) {
+                open_tcp_server();
+                if(!Option.disabletftp)cmd_tftp_server_init();
+                if(Option.UDP_PORT)open_udp_server();
+                services_started = true;
+            }
         }
     } else {
         cyw43_arch_enable_sta_mode();
@@ -4355,7 +4380,11 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
 #endif
 #endif
     ErrorInPrompt = false;
+#ifdef PICOCALC_UF2LOADER
+    exception_set_exclusive_handler(HARDFAULT_EXCEPTION,loader_hardfault_capture);
+#else
     exception_set_exclusive_handler(HARDFAULT_EXCEPTION,sigbus);
+#endif
     exception_set_exclusive_handler(SVCALL_EXCEPTION,sigbus);
     exception_set_exclusive_handler(PENDSV_EXCEPTION,sigbus);
     exception_set_exclusive_handler(NMI_EXCEPTION ,sigbus);
@@ -4444,6 +4473,9 @@ if(Option.CPU_Speed==FreqSVGA){ //adjust the size of the heap
             }
         }
     }
+#ifdef PICOCALC_UF2LOADER
+    loader_report_previous_fault();
+#endif
     memset(inpbuf,0,STRINGSIZE);
     WatchdogSet = false;
     if(_excep_code == INVALID_CLOCKSPEED) {

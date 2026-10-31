@@ -402,3 +402,7 @@ extern struct tagMTRand *g_myrand;
 #ifdef PICOCALC_UF2LOADER
 #include "LoaderFlash.h"
 #endif
+
+#ifdef PICOCALC_UF2LOADER
+#include "FaultCapture.h"
+#endif

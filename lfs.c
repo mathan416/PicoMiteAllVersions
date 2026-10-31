@@ -5297,17 +5297,26 @@ cleanup:
 
 // Thread-safe wrappers if enabled
 #ifdef LFS_THREADSAFE
-#define LFS_LOCK(cfg)   cfg->lock(cfg)
+#define LFS_CONFIG_LOCK(cfg)   cfg->lock(cfg)
 #define LFS_UNLOCK(cfg) cfg->unlock(cfg)
 #else
-#define LFS_LOCK(cfg)   ((void)cfg, 0)
+#define LFS_CONFIG_LOCK(cfg)   ((void)cfg, 0)
 #define LFS_UNLOCK(cfg) ((void)cfg)
 #endif
 
 // Public API
+#ifdef PICOCALC_UF2LOADER
+/* Single interpreter filesystem. Failed mounts must not leave public calls
+ * operating on the partially deinitialized littlefs state. */
+static lfs_t *picocalc_mounted;
+#define LFS_LOCK(c) ((picocalc_mounted && picocalc_mounted->cfg == (c)) ? LFS_CONFIG_LOCK(c) : LFS_ERR_IO)
+#else
+#define LFS_LOCK(cfg) LFS_CONFIG_LOCK(cfg)
+#endif
+
 #ifndef LFS_READONLY
 int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
-    int err = LFS_LOCK(cfg);
+    int err = LFS_CONFIG_LOCK(cfg);
     if (err) {
         return err;
     }
@@ -5328,6 +5337,9 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
             cfg->read_buffer, cfg->prog_buffer, cfg->lookahead_buffer,
             cfg->name_max, cfg->file_max, cfg->attr_max);
 
+#ifdef PICOCALC_UF2LOADER
+    picocalc_mounted = NULL;
+#endif
     err = lfs_rawformat(lfs, cfg);
 
     LFS_TRACE("lfs_format -> %d", err);
@@ -5337,7 +5349,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
 #endif
 
 int lfs_mount(lfs_t *lfs, const struct lfs_config *cfg) {
-    int err = LFS_LOCK(cfg);
+    int err = LFS_CONFIG_LOCK(cfg);
     if (err) {
         return err;
     }
@@ -5359,6 +5371,9 @@ int lfs_mount(lfs_t *lfs, const struct lfs_config *cfg) {
             cfg->name_max, cfg->file_max, cfg->attr_max);
 
     err = lfs_rawmount(lfs, cfg);
+#ifdef PICOCALC_UF2LOADER
+    picocalc_mounted = err ? NULL : lfs;
+#endif
 
     LFS_TRACE("lfs_mount -> %d", err);
     LFS_UNLOCK(cfg);
@@ -5373,6 +5388,9 @@ int lfs_unmount(lfs_t *lfs) {
     LFS_TRACE("lfs_unmount(%p)", (void*)lfs);
 
     err = lfs_rawunmount(lfs);
+#ifdef PICOCALC_UF2LOADER
+    if (!err) picocalc_mounted = NULL;
+#endif
 
     LFS_TRACE("lfs_unmount -> %d", err);
     LFS_UNLOCK(lfs->cfg);
