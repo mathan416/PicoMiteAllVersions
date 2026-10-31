@@ -112,3 +112,35 @@ answer subsequent Telnet or TFTP probes at 10.0.2.107. The 32 KiB upload has
 NOT passed, and saved-Wi-Fi/reconnect behavior after that command is NOT yet
 confirmed. User screen evidence is requested. Keep this PR in draft: stale
 TFTP-session cleanup and post-restart connectivity remain unresolved.
+
+## SD6 follow-up and SD7 candidate
+
+The user reported that the controlled software restart reached BASIC but
+printed a Wi-Fi connection failure. A subsequent physical restart restored
+10.0.2.107 without re-entering credentials: settings were retained, not wiped.
+The standalone 32768-byte upload/download then passed exact comparison.
+Three overwrites (1024, 17, 0 bytes) also passed with a client-side final-ACK
+retry probe, each under two seconds. A subsequent empty upload still returned
+No connection, so this is not complete protocol validation.
+
+Confirmed protocol defects in the bundled tftp.c: closing a completed upload
+forgets its final DATA block, so a lost final ACK followed by a valid DATA
+retry gets No connection. A repeated initial WRQ/RRQ after a lost initial
+reply is rejected as busy. SD7 caches only the final completed upload's peer,
+block and length for a bounded 20-second ACK dally, without holding the active
+slot or reopening/writing the file. Same-peer repeated initial requests resend
+their initial reply. Short packet headers are checked/copied before access;
+a failed write closes only once and is never cached as completed.
+
+The actual receive handler is tested with lost final/initial ACKs, full and
+short DATA blocks, expiry including timer wrap, an unrelated active transfer,
+wrong peers/blocks/lengths, write failure and truncated packets under ASan/UBSan.
+SD7 also prints the SDK result/link status on Wi-Fi failure and makes WEB
+CONNECT retry when the link is down (zero), as well as negative failures,
+using saved credentials without resetting settings. This is diagnostics and
+recovery, not a claim to have fixed the intermittent startup failure.
+
+The Mac helper now repeats the final download ACK during its bounded dally;
+a local mock explicitly drops the first ACK and verifies recovery and exact
+file contents. Both client and server directions need hardware retesting on
+SD7. SD7 is host-tested only until loaded on the unit. SD6 remains available.

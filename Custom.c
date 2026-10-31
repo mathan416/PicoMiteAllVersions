@@ -1888,7 +1888,7 @@ void cmd_web(void){
             	setwifi(tp);
                 WebConnect();
             } else {
-	            if(cyw43_wifi_link_status(&cyw43_state,CYW43_ITF_STA)<0){
+	            if(!WIFIconnected || cyw43_wifi_link_status(&cyw43_state,CYW43_ITF_STA)<=0){
 	                WebConnect();
 	            }
 	        }

@@ -4071,8 +4071,11 @@ void WebConnect(void){
         }
         cyw43_wifi_pm(&cyw43_state, CYW43_NO_POWERSAVE_MODE);        
         MMPrintString(" connecting to WiFi...\r\n");
-        if (cyw43_arch_wifi_connect_timeout_ms((char *)Option.SSID, (char *)(*Option.PASSWORD ? Option.PASSWORD : NULL), (*Option.PASSWORD ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN), 30000)) {
-            MMPrintString("failed to connect.\r\n");
+        int wifi_result = cyw43_arch_wifi_connect_timeout_ms((char *)Option.SSID, (char *)(*Option.PASSWORD ? Option.PASSWORD : NULL), (*Option.PASSWORD ? CYW43_AUTH_WPA2_AES_PSK : CYW43_AUTH_OPEN), 30000);
+        if (wifi_result) {
+            MMPrintString("failed to connect: code "); PInt(wifi_result);
+            MMPrintString(", link "); PInt(cyw43_wifi_link_status(&cyw43_state, CYW43_ITF_STA)); PRet();
+            MMPrintString("Use WEB CONNECT to retry saved WiFi.\r\n");
             WIFIconnected=0;
         } else {
             char buff[STRINGSIZE]={0};

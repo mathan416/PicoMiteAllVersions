@@ -55,6 +55,7 @@
 
 #include "lwip/udp.h"
 #include "lwip/timeouts.h"
+#include "lwip/sys.h"
 #include "lwip/debug.h"
 
 #define TFTP_MAX_PAYLOAD_SIZE 512
@@ -94,6 +95,18 @@ struct tftp_state {
 };
 
 static struct tftp_state tftp_state;
+
+/* Remember the final received DATA after closing its file. If the ACK is
+ * lost, RFC 1350 permits the sender to retransmit: acknowledge it again
+ * without reopening, rewriting, or reserving the active-transfer slot. */
+static struct {
+  ip_addr_t addr;
+  u16_t port, block, length;
+  u32_t time;
+  u8_t valid;
+} tftp_completed_write;
+static int tftp_repeat_final_ack(const ip_addr_t *addr, u16_t port,
+                                 const struct pbuf *p, u16_t block);
 
 static void tftp_tmr(void *arg);
 
@@ -191,6 +204,20 @@ send_ack(const ip_addr_t *addr, u16_t port, u16_t blknum)
   return ret;
 }
 
+static int
+tftp_repeat_final_ack(const ip_addr_t *addr, u16_t port,
+                      const struct pbuf *p, u16_t block)
+{
+  if (!tftp_completed_write.valid || port != tftp_completed_write.port ||
+      !ip_addr_eq(addr, &tftp_completed_write.addr) ||
+      block != tftp_completed_write.block ||
+      p->tot_len != tftp_completed_write.length + TFTP_HEADER_LENGTH ||
+      (u32_t)(sys_now() - tftp_completed_write.time) >= 2u*TFTP_TIMEOUT_MSECS)
+    return 0;
+  send_ack(addr, port, block);
+  return 1;
+}
+
 static err_t
 resend_data(const ip_addr_t *addr, u16_t port)
 {
@@ -242,8 +269,19 @@ send_data(const ip_addr_t *addr, u16_t port)
 static void
 tftp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
-  u16_t *sbuf = (u16_t *) p->payload;
+  u16_t header[2];
+  u16_t *sbuf = header;
   int opcode;
+  if (p->tot_len < sizeof header ||
+      pbuf_copy_partial(p, header, sizeof header, 0) != sizeof header) {
+    pbuf_free(p);
+    return;
+  }
+  if (sbuf[0] == PP_HTONS(TFTP_DATA) &&
+      tftp_repeat_final_ack(addr, port, p, lwip_ntohs(sbuf[1]))) {
+    pbuf_free(p);
+    return;
+  }
 
   LWIP_UNUSED_ARG(arg);
   LWIP_UNUSED_ARG(upcb);
@@ -269,7 +307,14 @@ tftp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr
       u16_t mode_end_offset;
 
       if (tftp_state.handle != NULL) {
-        send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Only one connection at a time is supported");
+        /* The initial ACK/DATA can be lost too. The same peer's repeated
+         * initial request must not reopen/truncate the file. */
+        if (tftp_state.blknum == 1 && opcode == PP_HTONS(TFTP_WRQ) && tftp_state.mode_write)
+          send_ack(addr, port, 0);
+        else if (tftp_state.blknum == 1 && opcode == PP_HTONS(TFTP_RRQ) && !tftp_state.mode_write && tftp_state.last_data)
+          resend_data(addr, port);
+        else
+          send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "Only one connection at a time is supported");
         break;
       }
 
@@ -296,6 +341,8 @@ tftp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr
       }
       pbuf_copy_partial(p, mode, mode_end_offset - filename_end_offset, filename_end_offset + 1);
 
+      if (tftp_completed_write.valid && port == tftp_completed_write.port &&
+          ip_addr_eq(addr, &tftp_completed_write.addr)) tftp_completed_write.valid = 0;
       tftp_state.handle = tftp_state.ctx->open(filename, mode, opcode == PP_HTONS(TFTP_WRQ));
       tftp_state.blknum = 1;
 
@@ -344,11 +391,20 @@ tftp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr
         if (ret < 0) {
           send_error(addr, port, TFTP_ERROR_ACCESS_VIOLATION, "error writing file");
           close_handle();
+          break;
         } else {
           send_ack(addr, port, blknum);
         }
 
         if (p->tot_len < TFTP_MAX_PAYLOAD_SIZE) {
+          if (ret >= 0) {
+            ip_addr_copy(tftp_completed_write.addr, *addr);
+            tftp_completed_write.port = port;
+            tftp_completed_write.block = blknum;
+            tftp_completed_write.length = p->tot_len;
+            tftp_completed_write.time = sys_now();
+            tftp_completed_write.valid = 1;
+          }
           close_handle();
         } else {
           tftp_state.blknum++;
@@ -459,6 +515,7 @@ tftp_init_common(u8_t mode, const struct tftp_context *ctx)
     return ret;
   }
 
+  tftp_completed_write.valid = 0;
   tftp_state.handle    = NULL;
   tftp_state.port      = 0;
   tftp_state.ctx       = ctx;
