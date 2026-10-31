@@ -1,6 +1,6 @@
 # SD6: bounded A: flash access and recovery
 
-SD6 is a hardware-test candidate, not a confirmed repair. SD4 is retained as
+SD6 is partially hardware-tested, not a confirmed complete repair. SD4 is retained as
 recovery. No loader reinstall, partition-table change or full-flash erase is
 required. Existing A: contents must be backed up before explicitly formatting
 an oversized filesystem. Applications and the private HA token are on B:.
@@ -90,3 +90,25 @@ recorded in the packaged build manifest. Hardware validation is pending.
 5. Check overwrite, missing-file, client cancellation and reconnection;
    retest B: as a control. Power-cycle, verify saved Wi-Fi/options, loader
    reentry and the B: tricorder. Record any Previous fault/flash error report.
+
+## SD6 hardware results
+
+The unit booted SD6, mounted the oversized A: filesystem for read-only recovery,
+and reported 4186112 bytes for MM.INFO(OPTION FLASH SIZE). The B: tricorder
+was confirmed working by the user. All five legacy A: files were downloaded
+and verified into a persistent local backup: bootcount (4 bytes), one known
+32-byte payload and three empty files. The last empty-file download needed a
+retry after TFTP remained busy; BASIC stayed responsive.
+
+With explicit user approval, DRIVE "A:/FORMAT" returned normally. Unique
+32-, 512- and 513-byte test files then uploaded and downloaded with exact byte
+comparisons. No CPU restart occurred during these transfers. This clears the
+previous SD5 512-byte crash case for the tested runs.
+
+The next 32768-byte upload was rejected as busy before block 0. A separate
+retry was also busy. BASIC still answered PRINT 607. A controlled CPU RESTART
+was then sent to clear the session and test reconnection; the board did not
+answer subsequent Telnet or TFTP probes at 10.0.2.107. The 32 KiB upload has
+NOT passed, and saved-Wi-Fi/reconnect behavior after that command is NOT yet
+confirmed. User screen evidence is requested. Keep this PR in draft: stale
+TFTP-session cleanup and post-restart connectivity remain unresolved.
