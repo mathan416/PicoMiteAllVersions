@@ -1685,9 +1685,18 @@ void __not_in_flash_func(ProcessWeb)(int mode){
     static int lastonoff=0;
     static uint64_t lastheartmsec=0;
     uint64_t timenow=time_us_64();   
+    // Poll architecture must keep servicing driver/lwIP work even while
+    // association failed or no TCP server has been opened yet.
+    if(testcount == 0 || timenow>lastusec){
+        lastusec=timenow+1000;
+        testcount = 0 ;
+        if(startupcomplete)cyw43_arch_poll();
+    }
+    testcount++;
+    if(testcount==100)testcount=0;
     if(!WIFIconnected && startupcomplete)goto flashonly;
     TCP_SERVER_T *state = (TCP_SERVER_T*)TCPstate;
-    if(!state)return;
+    if(!state)goto flashonly;
     int t=0;
     for(int i=0;i<MaxPcb;i++){
         if(state->client_pcb[i]==NULL){
@@ -1710,13 +1719,6 @@ void __not_in_flash_func(ProcessWeb)(int mode){
             }
         }
     }
-    if(testcount == 0 || timenow>lastusec){
-        lastusec=timenow+1000;
-        testcount = 0 ;
-        if(startupcomplete)cyw43_arch_poll();
-    }
-    testcount++;
-    if(testcount==100)testcount=0;
     if(!mode)return;
     if(state->telnet_pcb_no!=99){
         if(timenow > flushtimer){

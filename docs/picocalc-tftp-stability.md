@@ -144,3 +144,19 @@ The Mac helper now repeats the final download ACK during its bounded dally;
 a local mock explicitly drops the first ACK and verifies recovery and exact
 file contents. Both client and server directions need hardware retesting on
 SD7. SD7 is host-tested only until loaded on the unit. SD6 remains available.
+
+### Disconnected poll servicing
+
+Further review found ProcessWeb skipped cyw43_arch_poll after a failed
+connection (WIFIconnected=0), and returned before polling when TCPstate was
+null. This build uses PICO_CYW43_ARCH_POLL, so those paths stop servicing the
+poll-driven driver/lwIP work in the normal interpreter loop. SD7 now runs
+its bounded polling block before connection/server gating; server processing
+remains gated, and startupcomplete still prevents uninitialized driver calls.
+
+check_wifi_poll.py executes the actual ProcessWeb function under ASan/UBSan
+with startup incomplete, failed association with no server, connected with
+no server, a normal idle server and a later disconnection. All pass. This
+fix prevents a software servicing gap; it does not establish why the original
+30-second association attempt sometimes fails or promise automatic rejoining.
+The updated SD7 candidate must still be tested on hardware.
