@@ -3346,10 +3346,12 @@ int InitSDCard(void)
 }
 void getfullfilename(char *fname, char *q){
     int waste=0, t=FatFSFileSystem+1;
-    if(*cmdline){
+    // TFTP callbacks have no BASIC command line; explicit drives still apply.
+    if(fname[0] && fname[1]==':'){
         t = drivecheck(fname,&waste);
         fname+=waste;
     }
+    if(!*fname) error("File name required");
     FatFSFileSystem=t-1;
     char pp[FF_MAX_LFN] = {0};
     char *p=fname;

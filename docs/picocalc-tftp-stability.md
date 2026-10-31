@@ -190,3 +190,20 @@ routine passes a separate sanitizer test with failure -> success -> failure
 -> success: attempts and messages occur, while each listener is opened only
 once. This is tested for the normal successful initialization path; broader
 listener-allocation/error-path hardening remains separate work.
+
+### TFTP drive-prefix handling at the idle BASIC prompt
+
+The attempted SD8 upload produced repeated Could not find the file messages
+on the physical unit and no TFTP response. No SD8 file was created on B:.
+getfullfilename only called drivecheck when *cmdline was nonzero. TFTP runs
+with an empty interpreter command line, so an explicit B:/ destination could
+be resolved using the current A: filesystem instead. The requested
+pico2-apps directory then did not exist there. Repeated client requests
+repeated the interpreter error rather than returning a clean protocol error.
+
+SD8 now parses explicit drive prefixes independently of command-line state
+and rejects empty/drive-only names before indexing them. Actual drivecheck
+and getfullfilename functions pass sanitizer tests for A:/B: selection from
+the opposite current drive, lowercase prefixes, relative/root paths and empty
+names without any interpreter command-line dependency. Callback exception
+handling remains a separate firmware hardening concern.
