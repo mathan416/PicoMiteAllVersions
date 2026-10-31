@@ -286,7 +286,7 @@ endif()
 # The original linker otherwise permits code to grow into that reserved flash.
 if(COMPILE STREQUAL "WEB" OR COMPILE STREQUAL "WEBRP2350")
     # These networking callbacks are not timing-critical; retain the flash layout.
-    set_source_files_properties(MMtelnet.c MMtcpserver.c MMTCPclient.c
+    set_source_files_properties(FileIO.c MMtelnet.c MMtcpserver.c MMTCPclient.c
         MMntp.c MMudp.c MMtftp.c tftp.c
         PROPERTIES COMPILE_OPTIONS -Os)
     target_link_options(PicoMite PRIVATE
