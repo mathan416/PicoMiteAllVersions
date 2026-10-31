@@ -160,3 +160,33 @@ no server, a normal idle server and a later disconnection. All pass. This
 fix prevents a software servicing gap; it does not establish why the original
 30-second association attempt sometimes fails or promise automatic rejoining.
 The updated SD7 candidate must still be tested on hardware.
+
+## SD8: explicit WEB CONNECT feedback
+
+The user installed SD7, but WEB CONNECT produced no success message, leading
+them to use OPTION WIFI again. Review confirms the command silently returned
+when WIFIconnected was true and the Wi-Fi association status was positive;
+that status does not establish that TCP/IP has an address. Our earlier claim
+that the user's retry had succeeded was premature.
+
+SD8 explicitly reports Already connected plus the IP only when the saved
+runtime flag and cyw43_tcpip_link_status==CYW43_LINK_UP agree. Otherwise it
+calls WebConnect, which reports attempt/success/failure. Empty saved SSID
+reports that Wi-Fi is not configured. Existing supplied-credential behavior
+is retained. No credential values are printed, and the no-argument command
+adds no settings writes or CPU restart.
+
+check_web_connect.py exercises the actual command branch under ASan/UBSan:
+no configuration, fully connected, associated-only, no-IP, down, failure,
+stale runtime flag, and explicitly supplied credentials. All pass. SD8
+retains the SD7 TFTP/polling and SD6 partition fixes. Hardware validation of
+this command feedback remains pending; no assumption of reconnect success
+should be made from an IP string alone.
+
+Repeated successful WebConnect calls also reopened TCP/TFTP/UDP listeners
+without tearing down their previous instances. SD8 initializes those services
+once per boot and reuses them across association retries. The real WebConnect
+routine passes a separate sanitizer test with failure -> success -> failure
+-> success: attempts and messages occur, while each listener is opened only
+once. This is tested for the normal successful initialization path; broader
+listener-allocation/error-path hardening remains separate work.

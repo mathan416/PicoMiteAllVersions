@@ -4057,6 +4057,7 @@ static void MIPS16 transform_star_command(char *input) {
 }
 #ifdef PICOMITEWEB
 void WebConnect(void){
+    static bool services_started = false;
     if(*Option.SSID){
         if(*Option.ipaddress){
             cyw43_arch_enable_sta_mode();
@@ -4084,9 +4085,14 @@ void WebConnect(void){
             sprintf(buff,"Connected %s\r\n",ip4addr_ntoa(netif_ip4_addr(netif_list)));
             MMPrintString(buff);
             WIFIconnected=1;
-            open_tcp_server();
-            if(!Option.disabletftp)cmd_tftp_server_init();
-            if(Option.UDP_PORT)open_udp_server();
+            // Association retries reuse listeners bound to this netif. Opening
+            // them again loses clients and attempts to bind occupied ports.
+            if (!services_started) {
+                open_tcp_server();
+                if(!Option.disabletftp)cmd_tftp_server_init();
+                if(Option.UDP_PORT)open_udp_server();
+                services_started = true;
+            }
         }
     } else {
         cyw43_arch_enable_sta_mode();
