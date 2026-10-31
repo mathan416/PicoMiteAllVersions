@@ -1,7 +1,7 @@
 # SD9: TFTP error-path hardening
 
 SD8's normal transfers, live tricorder and saved-Wi-Fi reflashes were verified
-on hardware. This candidate closes the remaining TFTP exception/cleanup paths.
+on hardware. This validated build closes the remaining TFTP exception/cleanup paths.
 It retains the same partition, saved-options sector and 16 KiB stack. Use the
 already patched 2.4.1-erasefix1 menu; no format or bootloader reinstall is needed.
 
@@ -65,8 +65,39 @@ fault injection under ASan/UBSan. BASIC heap calls abort the test. Coverage:
 
 All earlier networking, flash/LittleFS, options, keyboard/IRQ, Wi-Fi service and
 linker/stack regression checks pass. The complete SD9 image fits below saved
-options. Hardware testing must still pass before this is labelled stable:
-missing files, malformed requests, cancellation, timeout, ordinary transfers,
-console responsiveness, tricorder, and saved settings after restart/reflash.
+options. The hardware gate below has now passed: missing files, malformed requests,
+cancellation, timeout, ordinary transfers, console responsiveness and the
+tricorder. Saved settings previously survived the patched-loader reflash, and
+SD9 reconnected using that configuration.
 Full-storage and injected physical I/O failures are tested on mocks, not by
 filling or removing the user's live SD card. The working SD8 remains recovery.
+
+## Hardware validation: passed
+
+The running version string was independently read from flash as
+6.00.03-netfix2-sd9 before any error probes. The bounded live test script is
+`tests/hardware/verify_sd9_errors.py`; it requires a confirmed SD9 installation,
+uses unique files only, stops at the first unexpected response and records its
+created files for explicit cleanup.
+
+The unit passed 20 alternating A:/B: missing-file requests, each followed by a
+healthy read. Malformed names/modes/terminators, oversized DATA, invalid ACK
+lengths, unknown operations and truncated packets recovered cleanly. A repeated
+initial WRQ, competing peer and cancellation with a non-NUL-terminated client
+error all worked. An abandoned upload expired and the slot was usable again.
+A: overwrite/readback sizes 0, 32, 512, 513 and 32768 matched exactly; 32 KiB
+took 7.41 seconds. A B: 513-byte transfer passed afterward. No BASIC error or
+CPU restart occurred; WEB CONNECT explicitly reported the current IP.
+
+An additional B: transfer succeeded with all ten BASIC file handles occupied.
+Those handles remained writable and closed normally; readback retained both
+before/after records. All 16 new test files were removed. Installed tricorder
+source matched the Mac copy (14964 bytes). Live basement and atmosphere/weather
+scans returned valid values with sound enabled and MM.ERRNO=0. The tricorder
+was returned to its weather page; the console is closed after final checks.
+
+SD9 is the validated stable build for this tested Pico 2 W/PicoCalc workflow.
+The stable-named UF2 is byte-identical to SD9_TEST already on the unit; no extra
+reflash is needed. SD8 is retained for rollback. Physical storage I/O/full/OOM
+faults were injected on the host rather than induced on the user's live media.
+Interrupted uploads can still leave partial target files, as documented above.

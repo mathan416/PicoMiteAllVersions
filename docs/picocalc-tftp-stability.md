@@ -1,3 +1,10 @@
+# Current status: validated SD9 build
+
+SD9 completes the targeted TFTP error-path hardening and passes host fault
+injection plus live recovery/transfer/tricorder checks. See
+[picocalc-sd9-error-paths.md](picocalc-sd9-error-paths.md) for current behavior,
+validation and the stable artifact. The history below records earlier builds.
+
 # SD6: bounded A: flash access and recovery
 
 SD6 is partially hardware-tested, not a confirmed complete repair. SD4 is retained as
