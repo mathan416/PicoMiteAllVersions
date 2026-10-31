@@ -56,7 +56,7 @@ static unsigned opcode(void){assert(sent_len>=4);return ((unsigned)sent[0]<<8)|s
 static unsigned number(void){assert(sent_len>=4);return ((unsigned)sent[2]<<8)|sent[3];}
 static void receive_raw(const void*data,u16_t n,int split,unsigned port){struct pbuf*p;if(split>=0&&split<n){p=makebuf(split);p->next=makebuf(n-split);p->tot_len=n;memcpy(p->payload,data,split);memcpy(p->next->payload,(const uint8_t*)data+split,n-split);}else{p=makebuf(n);memcpy(p->payload,data,n);}ip_addr_t peer={42};tftp_recv(NULL,&pcb,p,&peer,port);}
 static void request(unsigned op,const char*name,const char*mode,int split,unsigned port){uint8_t data[1024];size_t n=strlen(name),m=strlen(mode);assert(n+m+4<=sizeof data);data[0]=0;data[1]=op;memcpy(data+2,name,n+1);memcpy(data+n+3,mode,m+1);receive_raw(data,n+m+4,split,port);}
-static void data_packet(unsigned op,unsigned block,const void*payload,u16_t bytes,int split,unsigned port){uint8_t data[1024];assert(bytes+4<=sizeof data);data[0]=0;data[1]=op;data[2]=block>>8;data[3]=block;memcpy(data+4,payload,bytes);receive_raw(data,bytes+4,split,port);}
+static void data_packet(unsigned op,unsigned block,const void*payload,u16_t bytes,int split,unsigned port){uint8_t data[1024];assert((size_t)bytes+4<=sizeof data);data[0]=0;data[1]=op;data[2]=block>>8;data[3]=block;memcpy(data+4,payload,bytes);receive_raw(data,bytes+4,split,port);}
 static void idle(void){assert(!tftp_state.handle&&!tftp_file.active&&!timer_pending&&!pbuf_live);}
 static void cancel(void){if(tftp_state.handle)data_packet(TFTP_ERROR,0,"cancel",7,-1,123);idle();}
 static void put_good(const char*name){request(TFTP_WRQ,name,"octet",-1,123);assert(opcode()==TFTP_ACK&&number()==0);data_packet(TFTP_DATA,1,"abc",3,-1,123);assert(opcode()==TFTP_ACK&&number()==1);idle();}
