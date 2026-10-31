@@ -33,3 +33,7 @@ image's occupied sectors. Hardware verification remains pending: boot the new
 menu, configure Wi-Fi once if needed, use that menu to flash the same SD8
 image again, and confirm WEB CONNECT still sees saved configuration. No A:
 formatting or BOOTSEL bootloader reinstall is needed for this fix.
+
+Hardware follow-up: the user confirmed the configured Wi-Fi details survived
+both an ordinary power cycle and an SD8 reflash through the patched menu.
+The loader settings-preservation test has therefore passed on their unit.

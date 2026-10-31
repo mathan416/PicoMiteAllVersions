@@ -207,3 +207,25 @@ and getfullfilename functions pass sanitizer tests for A:/B: selection from
 the opposite current drive, lowercase prefixes, relative/root paths and empty
 names without any interpreter command-line dependency. Callback exception
 handling remains a separate firmware hardening concern.
+
+## SD8 and erasefix1 hardware verification
+
+The user confirmed Wi-Fi survives a power cycle and a subsequent SD8 reflash
+using the 2.4.1-erasefix1 menu. On the reconnected unit, flash capacity reports
+4186112. With current drive B:, one unique A: file was overwritten with 0,
+32, 512, 513 and 32768 bytes; every upload/download matched exactly. The
+32 KiB round trip took 7.93 seconds. A directory listing confirmed the file
+was actually on A:. With current drive A:, a B:/pico2-apps 513-byte transfer
+also passed. No busy errors or CPU restarts occurred in this sequence. Both
+new test files were removed afterward.
+
+The installed B:/tricorder.bas matched the Mac source exactly (14964 bytes).
+The private token was checked for existence only. A live basement scan
+returned good=1, valid=1, 21.5 C, soundOn=1 and MM.ERRNO=0. The atmosphere
+scan completed with weather valid=1, 9.4 C, clear-night, humidity=61 and
+reported wind=30; MM.ERRNO=0. The app was restarted on the weather page for
+normal use. No Home Assistant device-control commands were sent.
+
+This validates normal wireless programming and live instrument use. Missing
+file/malformed-request callback error handling is still not fully hardened
+or validated; this draft is not an exhaustive firmware stability claim.
